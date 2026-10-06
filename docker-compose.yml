@@ -1,0 +1,40 @@
+# Local stack: MongoDB + FastAPI backend (with Chromium) + React client (nginx).
+#   cp backend/.env.example backend/.env && cp client/.env.example client/.env
+#   docker compose up --build        -> client http://localhost:5173 , API http://localhost:8000/docs
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes: [mongo_data:/data/db]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      MONGO_URI: mongodb://mongo:27017          # service name, overrides .env for compose
+      ALLOWED_ORIGIN: http://localhost:5173
+      STORAGE_DIR: /data/artifacts
+    ports: ["8000:8000"]
+    depends_on:
+      mongo: { condition: service_healthy }
+    volumes: [artifacts:/data/artifacts]
+    shm_size: "1gb"                             # Chromium needs more than Docker's default 64MB /dev/shm
+
+  client:
+    build:
+      context: ./client
+      args:
+        VITE_API_URL: http://localhost:8000     # baked at build time (Vite)
+    restart: unless-stopped
+    ports: ["5173:80"]
+    depends_on: [backend]
+
+volumes:
+  mongo_data:
+  artifacts:

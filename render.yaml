@@ -1,0 +1,34 @@
+# Render Blueprint: one Docker web service (the whole backend). Frontend -> Vercel, DB -> MongoDB Atlas.
+services:
+  - type: web
+    name: launch-crew-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter            # Chromium needs RAM: avoid the 512MB free tier. A disk also requires a paid plan.
+    healthCheckPath: /health
+    autoDeploy: true
+    disk:                    # keeps generated HTML/screenshots across deploys (or swap Storage for S3/R2)
+      name: artifacts
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - { key: APP_ENV, value: production }
+      - { key: MOCK_LLM, value: "false" }
+      - { key: STORAGE_DIR, value: /data/artifacts }
+      - { key: ALLOWED_ORIGIN, sync: false }        # e.g. https://your-app.vercel.app
+      - { key: MONGO_URI, sync: false }              # Atlas SRV string
+      - { key: MONGO_DB, value: launch_crew }
+      - { key: JWT_SECRET, generateValue: true }
+      - { key: GROQ_API_KEY, sync: false }
+      - { key: GROQ_MODEL, sync: false }
+      - { key: GROQ_FAST_MODEL, sync: false }
+      - { key: GROQ_VISION_MODEL, sync: false }
+      - { key: TAVILY_API_KEY, sync: false }
+      - { key: NETLIFY_AUTH_TOKEN, sync: false }
+      - { key: LLM_MAX_CONCURRENCY, value: "2" }
+      - { key: MAX_STEPS, value: "30" }
+      - { key: MAX_TOKEN_BUDGET, value: "120000" }
+      - { key: AGENT_TIMEOUT_S, value: "120" }
+      - { key: MAX_CRITIC_ITERATIONS, value: "3" }
+      - { key: RUNS_PER_HOUR, value: "10" }
