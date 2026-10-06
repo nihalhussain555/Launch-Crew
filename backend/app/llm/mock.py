@@ -139,8 +139,14 @@ class MockProvider:
                 "fonts": {"heading": "'Trebuchet MS', 'Segoe UI', Arial, sans-serif", "body": "system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif"},
                 "layout_style": "minimal"})
         elif agent == "engineer":
-            m = re.search(r"INPUT_JSON:\s*(\{.*\})", _all_text(messages))
-            text = "```html\n" + build_page(json.loads(m.group(1))) + "\n```"
+            blob = _all_text(messages)
+            m = re.search(r"INPUT_JSON:\s*(\{.*\})", blob)
+            page = build_page(json.loads(m.group(1)))
+            fx = re.search(r"FIXES \(apply all, keep everything else unchanged\):\n(.*?)\nCURRENT_HTML:", blob, re.S)
+            notes = re.findall(r"^- (.+)$", fx.group(1), re.M) if fx else []
+            if notes:  # mock only: make a requested revision visible so the feature can be demoed offline
+                page = page.replace("</header>", f'<div class="wrap"><p class="sub" id="revision-note">Revision applied: {html.escape(notes[0])}</p></div></header>', 1)
+            text = "```html\n" + page + "\n```"
         elif agent == "critic":
             text = json.dumps({"summary": "Automated checks found issues to fix.", "fixes": [
                 {"priority": 1, "agent": "engineer", "instruction": "Fix every failed check listed in the report."}]})

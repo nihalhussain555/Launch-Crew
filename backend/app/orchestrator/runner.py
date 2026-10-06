@@ -73,6 +73,34 @@ async def launch_pipeline(app_state, run_id: str) -> None:
     except Exception as exc:  # noqa: BLE001
         await _fail(db, ctx, exc)
 
+async def revise_pipeline(app_state, run_id: str, instruction: str, target: str) -> None:
+    """Apply the user's feedback. Runs only after POST /revise flipped the run from 'awaiting_approval' to 'running'."""
+    db = app_state.db
+    doc = await db.runs.find_one({"_id": ObjectId(run_id)})
+    state = RunState.model_validate(doc["state"])
+    ctx = RunContext(run_id=run_id, settings=app_state.settings, llm=app_state.llm, state=state,
+                     sink=DBEventSink(db, run_id), storage=app_state.storage,
+                     checkpoint=lambda c, st: _checkpoint(db, c, st),
+                     tokens_used=doc.get("tokens_used", 0), steps=0)   # steps reset per phase; token budget stays cumulative
+    try:
+        state.html = (await app_state.storage.load(state.html_key)).decode("utf-8")
+        await Orchestrator(ctx).revise(instruction, target)
+    except Exception as exc:  # noqa: BLE001
+        # A failed revision must not destroy the run: go back to the approval gate with the last good checkpoint.
+        msg = (str(exc) or exc.__class__.__name__)[:300]
+        log.exception("revision of run %s failed", run_id)
+        await db.runs.update_one({"_id": ObjectId(run_id)}, {"$set": {"status": "awaiting_approval", "updated_at": now()}})
+        await ctx.emit("agent_message", agent="system", message=f"Revision failed: {msg}. Your last version is still available to approve.")
+        await ctx.emit("awaiting_approval", message="Revision failed - previous version kept.",
+                       remaining_errors=state.check_summary.get("errors", 0), html_version=state.html_version)
+
+
+async def claim_for_revision(db, run_id: str, user_id: str) -> bool:
+    """Atomic gate: only a run in 'awaiting_approval' can be revised (blocks concurrent revise/approve)."""
+    res = await db.runs.find_one_and_update(
+        {"_id": ObjectId(run_id), "user_id": user_id, "status": "awaiting_approval"},
+        {"$set": {"status": "running", "updated_at": now()}})
+    return res is not None
 
 async def claim_for_deploy(db, run_id: str, user_id: str) -> bool:
     """Atomic gate: only a run in 'awaiting_approval' can move to 'deploying' (blocks double-approve/skips)."""

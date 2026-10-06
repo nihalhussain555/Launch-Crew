@@ -34,6 +34,7 @@ class RunState(BaseModel):
     sanitizer_violations: list[str] = Field(default_factory=list)
 
     iteration: int = 0
+    revisions: int = 0
     check_results: list[dict] = Field(default_factory=list)
     check_summary: dict = Field(default_factory=dict)
     critic_feedback: dict | None = None

@@ -5,7 +5,10 @@ function describe(ev) {
   const d = ev.data;
   switch (ev.type) {
     case "agent_started": return { icon: ICON[d.agent] || "🤖", title: `${cap(d.agent)} started`, tone: "run" };
-    case "agent_message": return { icon: "✅", title: `${cap(d.agent)} finished`, body: d.message, meta: d.tokens ? `${d.tokens} tokens` : "", tone: "ok" };
+        case "agent_message":
+      if (d.agent === "you") return { icon: "💬", title: "You requested a change", body: d.message, tone: "run" };
+      if (d.agent === "system") return { icon: "⚠️", title: "System notice", body: d.message, tone: "warn" };
+      return { icon: "✅", title: `${cap(d.agent)} finished`, body: d.message, meta: d.tokens ? `${d.tokens} tokens` : "", tone: "ok" };
     case "tool_call": return { icon: "🔧", title: `${cap(d.agent)} used ${d.tool}`, body: d.args?.query || d.url, tone: "tool" };
     case "rate_limited": return { icon: "⏳", title: "Rate limited — retrying", body: d.message, tone: "warn" };
     case "check_results": return { icon: "📋", title: `Browser checks (review ${d.iteration})`,

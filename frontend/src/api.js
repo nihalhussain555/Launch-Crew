@@ -44,6 +44,7 @@ export const api = {
   createRun: (projectId) => post(`/api/projects/${projectId}/runs`),
   getRun: (id) => json(`/api/runs/${id}`),
   approve: (id) => post(`/api/runs/${id}/approve`),
+  revise: (id, instruction, target) => post(`/api/runs/${id}/revise`, { instruction, target }),
   getHtml: async (id) => (await raw(`/api/runs/${id}/html`)).text(),
   screenshotUrl: async (id, vp) => URL.createObjectURL(await (await raw(`/api/runs/${id}/screenshots/${vp}`)).blob()),
   // EventSource can't send headers, so the stream endpoint accepts ?token= (that endpoint only)

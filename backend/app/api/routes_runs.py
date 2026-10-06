@@ -1,11 +1,19 @@
+from typing import Literal
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
-from app.core.deps import get_current_user, get_db
+from app.core.deps import get_current_user, get_db, get_settings_dep
 from app.db.models import RunOut, oid, run_out
-from app.orchestrator.runner import claim_for_deploy, launch_pipeline
+from app.orchestrator.runner import claim_for_deploy, claim_for_revision, launch_pipeline, revise_pipeline
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
+
+
+class ReviseIn(BaseModel):
+    instruction: str = Field(min_length=3, max_length=500)
+    target: Literal["page", "copy", "design"] = "page"
 
 
 async def own_run(db, run_id: str, user) -> dict:
@@ -27,6 +35,19 @@ async def approve(run_id: str, request: Request, background: BackgroundTasks, db
     if not await claim_for_deploy(db, run_id, str(user["_id"])):
         raise HTTPException(409, "Run is not awaiting approval")
     background.add_task(launch_pipeline, request.app.state, run_id)
+    return run_out(await own_run(db, run_id, user))
+
+
+@router.post("/{run_id}/revise", response_model=RunOut, status_code=202)
+async def revise(run_id: str, body: ReviseIn, request: Request, background: BackgroundTasks, db=Depends(get_db),
+                 settings=Depends(get_settings_dep), user=Depends(get_current_user)):
+    """Ask the crew to change the page/copy/design before approving. Capped by MAX_REVISIONS per run."""
+    run = await own_run(db, run_id, user)
+    if run.get("state", {}).get("revisions", 0) >= settings.max_revisions:
+        raise HTTPException(429, f"Revision limit reached ({settings.max_revisions} per run). Approve this version or start a new run.")
+    if not await claim_for_revision(db, run_id, str(user["_id"])):
+        raise HTTPException(409, "Run is not awaiting approval")
+    background.add_task(revise_pipeline, request.app.state, run_id, body.instruction.strip(), body.target)
     return run_out(await own_run(db, run_id, user))
 
 

@@ -7,6 +7,7 @@ import CriticReport from "../components/CriticReport";
 import PreviewFrame from "../components/PreviewFrame";
 import SocialPosts from "../components/SocialPosts";
 import { useRunStream } from "../hooks/useRunStream";
+import ReviseForm from "../components/ReviseForm";
 
 const REFRESH_ON = new Set(["agent_message", "check_results", "awaiting_approval", "deployed", "failed"]);
 
@@ -65,6 +66,7 @@ export default function RunDetail() {
       </div>
       {err && <div className="error" role="alert">{err}</div>}
       <ApproveDeploy run={run} onChange={setRun} />
+        <ReviseForm run={run} onChange={setRun} />
       <div className="grid2">
         <AgentTrace events={events} connected={connected} status={run.status} />
         <PreviewFrame html={html} loading={["queued", "running"].includes(run.status)} />

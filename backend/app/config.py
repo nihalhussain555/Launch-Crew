@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     max_critic_iterations: int = 3
     tool_rounds_cap: int = 3
     runs_per_hour: int = 10
+    max_revisions: int = 5
     engineer_max_tokens: int = 6000
 
     # Artifact storage (HTML + screenshots): "mongo" (default, survives redeploys) or "local" (STORAGE_DIR).
