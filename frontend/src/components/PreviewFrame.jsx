@@ -1,4 +1,6 @@
 import { useState } from "react";
+import AiWorking from "./AiWorking";
+import EmptyState from "./EmptyState";
 
 /** Generated pages are untrusted: sandboxed iframe (scripts allowed for the page's own JS, no same-origin, no navigation). */
 export default function PreviewFrame({ html, loading }) {
@@ -24,7 +26,8 @@ export default function PreviewFrame({ html, loading }) {
           </div>
         </div>
       </div>
-      {!html ? <div className="empty muted">{loading ? "Building the page…" : "The page will appear here once the Engineer finishes."}</div> : (
+      {!html ? (loading ? <AiWorking label="Building your page…" />
+        : <EmptyState icon="monitor" title="No page yet" text="The preview appears here once the Engineer finishes." />) : (
         <div className="frame-wrap">
           <iframe title="Landing page preview" sandbox="allow-scripts" srcDoc={html} className={`frame ${mode}`} />
         </div>

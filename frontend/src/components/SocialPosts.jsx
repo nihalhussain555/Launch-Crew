@@ -1,8 +1,9 @@
 import { useState } from "react";
+import { copyText } from "../utils";
 
 function Copy({ text }) {
   const [ok, setOk] = useState(false);
-  return <button className="btn ghost small" onClick={async () => { await navigator.clipboard.writeText(text); setOk(true); setTimeout(() => setOk(false), 1500); }}>{ok ? "Copied" : "Copy"}</button>;
+  return <button className="btn ghost small" onClick={async () => { if (await copyText(text)) { setOk(true); setTimeout(() => setOk(false), 1500); } }}>{ok ? "Copied" : "Copy"}</button>;
 }
 
 export default function SocialPosts({ posts, email }) {

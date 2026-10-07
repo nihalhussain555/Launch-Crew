@@ -106,3 +106,27 @@ async def test_invalid_then_valid_recovers(make_ctx):
     ctx.llm = LLMClient(ctx.settings, provider=Once())
     agent = BaseAgent(); agent.name = "strategist"
     assert (await agent.call_json(ctx, "IDEA: x", Strategy)).positioning == "p"
+
+async def test_panel_and_readiness_score_are_produced(make_ctx, monkeypatch):
+    patch_checks(monkeypatch, [GOOD_CHECKS])
+    ctx, events = make_ctx()
+    await Orchestrator(ctx).run_until_approval()
+    s = ctx.state
+    assert s.panel and len(s.panel["reactions"]) >= 3 and 1 <= s.panel["avg_score"] <= 10 and s.panel["suggested_fix"]
+    assert s.readiness and 0 <= s.readiness["total"] <= 100 and {c["id"] for c in s.readiness["components"]} == {"quality", "audience", "hygiene"}
+    assert "panel" in [d["agent"] for t, d in events if t == "agent_started"]
+
+
+async def test_panel_failure_does_not_fail_the_run(make_ctx, monkeypatch):
+    patch_checks(monkeypatch, [GOOD_CHECKS])
+    from app.agents import panel as panel_mod
+
+    async def boom(self, ctx):
+        raise RuntimeError("panel exploded")
+
+    monkeypatch.setattr(panel_mod.PanelAgent, "run", boom)
+    ctx, events = make_ctx()
+    await Orchestrator(ctx).run_until_approval()           # must not raise
+    assert ctx.state.panel is None and events[-1][0] == "awaiting_approval"
+    assert ctx.state.readiness["total"] > 0                # re-normalised without the audience component
+    assert any(t == "agent_message" and d["agent"] == "system" for t, d in events)

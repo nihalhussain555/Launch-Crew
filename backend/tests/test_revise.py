@@ -19,7 +19,7 @@ async def test_revise_page_rebuilds_and_returns_to_approval(make_ctx, monkeypatc
     s = ctx.state
     assert s.revisions == 1 and s.html_version == v + 1 and s.pending_fixes == {}
     assert "Make the hero button bigger" in s.html            # mock engineer echoes the requested change
-    assert started(events, mark) == ["engineer", "critic"]      # page target: engineer only, then re-check
+    assert started(events, mark) == ["copywriter", "engineer", "critic", "panel"]   # words changed -> audience re-tested
     assert events[-1][0] == "awaiting_approval" and "deployed" not in [t for t, _ in events]
 
 

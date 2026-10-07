@@ -1,6 +1,6 @@
 """Custom orchestrator (no framework): a small explicit pipeline with a bounded critic loop.
 
-researcher -> strategist -> copywriter -> designer -> engineer -> [critic -> fixes -> engineer]* -> (human approval) -> launcher
+researcher -> strategist -> copywriter -> designer -> engineer -> [critic -> fixes -> engineer]* -> panel -> (human approval) -> launcher
                                                                       ^---- revise(): user feedback re-enters here ----'
 """
 import asyncio
@@ -11,8 +11,10 @@ from app.agents.critic import CriticAgent
 from app.agents.designer import DesignerAgent
 from app.agents.engineer import EngineerAgent
 from app.agents.launcher import LauncherAgent
+from app.agents.panel import PanelAgent
 from app.agents.researcher import ResearcherAgent
 from app.agents.strategist import StrategistAgent
+from app.orchestrator.readiness import compute_readiness
 from app.orchestrator.state import GuardrailError, RunContext
 
 TARGET_AGENT = {"page": "engineer", "copy": "copywriter", "design": "designer"}
@@ -47,6 +49,16 @@ class Orchestrator:
                 break
             await self._apply_fixes(s.critic_feedback["fixes"])
 
+    async def _assess(self, rerun_panel: bool = True) -> None:
+        """Audience panel (optional - never fails the run) + Launch Readiness Score."""
+        s = self.ctx.state
+        if rerun_panel or not s.panel:
+            try:
+                await self._run(PanelAgent())
+            except Exception as exc:  # noqa: BLE001 - the panel is a bonus, not a gate
+                await self.ctx.emit("agent_message", agent="system", message=f"Audience panel skipped: {str(exc)[:160]}")
+        s.readiness = compute_readiness(s)
+
     async def _await_approval(self, message: str) -> None:
         ctx, s = self.ctx, self.ctx.state
         await ctx.checkpoint("awaiting_approval")
@@ -59,6 +71,7 @@ class Orchestrator:
         for agent in (ResearcherAgent(), StrategistAgent(), self.copywriter, self.designer, self.engineer):
             await self._run(agent)
         await self._critic_loop()
+        await self._assess()
         await self._await_approval("Review the preview, then approve to deploy.")
 
     async def revise(self, instruction: str, target: str = "page") -> None:
@@ -79,6 +92,7 @@ class Orchestrator:
         await self._apply_fixes(fixes)
         s.iteration = 0                                  # fresh critic budget for this revision
         await self._critic_loop()
+        await self._assess(rerun_panel=(target == "copy"))   # re-test the audience only when the words changed
         await self._await_approval("Revision applied. Review the preview, then approve to deploy.")
 
     async def _apply_fixes(self, fixes: list[dict]) -> None:

@@ -1,18 +1,24 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { EXAMPLES } from "../constants";
+import Icon from "./Icon";
 
-const EXAMPLES = ["A habit tracker for night-shift workers", "A meal-prep planner for busy parents", "A language-exchange app for retirees"];
-
-export default function IdeaForm({ onSubmit, busy }) {
-  const [idea, setIdea] = useState("");
+export default function IdeaForm({ onSubmit, busy, initial = "", submitLabel = "Launch the crew", showExamples = true, rows = 3 }) {
+  const [idea, setIdea] = useState(initial);
+  useEffect(() => setIdea(initial), [initial]);
+  const ok = idea.trim().length >= 5;
   return (
-    <form className="card" onSubmit={(e) => { e.preventDefault(); onSubmit(idea.trim()); }}>
-      <h2>What are we launching?</h2>
-      <textarea rows={3} maxLength={500} required minLength={5} value={idea} onChange={(e) => setIdea(e.target.value)}
-        placeholder="Describe your product idea in a sentence…" />
-      <div className="row wrap">
-        {EXAMPLES.map((x) => <button type="button" key={x} className="chip" onClick={() => setIdea(x)}>{x}</button>)}
+    <form className="idea-form" onSubmit={(e) => { e.preventDefault(); if (ok) onSubmit(idea.trim()); }}>
+      <textarea rows={rows} maxLength={500} required minLength={5} value={idea} onChange={(e) => setIdea(e.target.value)}
+        placeholder="Describe your product idea in a sentence…" aria-label="Product idea" data-autofocus />
+      {showExamples && (
+        <div className="row wrap">
+          {EXAMPLES.map((x) => <button type="button" key={x} className="chip" onClick={() => setIdea(x)}>{x}</button>)}
+        </div>
+      )}
+      <div className="row between wrap">
+        <span className="muted small">{idea.length}/500</span>
+        <button className="btn primary" disabled={busy || !ok}>{busy ? "Starting the crew…" : <><Icon name="rocket" size={17} /> {submitLabel}</>}</button>
       </div>
-      <button className="btn primary" disabled={busy || idea.trim().length < 5}>{busy ? "Starting the crew…" : "Launch the crew"}</button>
     </form>
   );
 }

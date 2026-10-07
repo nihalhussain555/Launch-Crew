@@ -150,6 +150,16 @@ class MockProvider:
         elif agent == "critic":
             text = json.dumps({"summary": "Automated checks found issues to fix.", "fixes": [
                 {"priority": 1, "agent": "engineer", "instruction": "Fix every failed check listed in the report."}]})
+        elif agent == "panel":
+            text = json.dumps({
+                "reactions": [
+                    {"persona": "Target user", "score": 8, "first_impression": f"Clear and made for me: {aud}.", "top_objection": "I want to see how it works before I sign up.", "would_sign_up": True},
+                    {"persona": "The Skeptic", "score": 6, "first_impression": "Sounds nice, but I have heard big promises before.", "top_objection": "There is no proof or concrete example on the page.", "would_sign_up": False},
+                    {"persona": "The Busy Decision-maker", "score": 8, "first_impression": "I understood it in a few seconds.", "top_objection": "Not sure what happens after I click the button.", "would_sign_up": True},
+                    {"persona": "The Budget-Conscious User", "score": 7, "first_impression": "Looks simple enough to try.", "top_objection": "Pricing is not mentioned.", "would_sign_up": True}],
+                "summary": "Clear positioning; the main gap is proof and what happens next.",
+                "suggested_fix": "Add a one-line 'how it works' under the headline and say what happens after sign-up.",
+                "suggested_target": "copy"})
         elif agent == "launcher":
             text = json.dumps({
                 "social_posts": [

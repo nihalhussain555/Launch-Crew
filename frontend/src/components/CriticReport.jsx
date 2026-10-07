@@ -1,3 +1,5 @@
+import Icon from "./Icon";
+
 export default function CriticReport({ state, shots }) {
   const checks = state.check_results || [];
   if (!checks.length) return null;
@@ -9,7 +11,7 @@ export default function CriticReport({ state, shots }) {
       <ul className="checks">
         {checks.map((c, i) => (
           <li key={i} className={c.passed ? "ok" : c.severity === "error" ? "err" : "warn"}>
-            <span>{c.passed ? "✓" : c.severity === "error" ? "✕" : "!"}</span>
+            <span><Icon name={c.passed ? "check" : c.severity === "error" ? "close" : "alert"} size={17} /></span>
             <div><strong>{c.label}</strong> <span className="muted small">({c.viewport})</span>
               {c.detail && <div className="small muted">{c.detail}</div>}</div>
           </li>

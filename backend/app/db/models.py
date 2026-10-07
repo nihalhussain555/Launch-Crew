@@ -52,6 +52,7 @@ class RunOut(BaseModel):
     tokens_used: int = 0
     steps: int = 0
     state: dict[str, Any] = {}
+    share_token: str | None = None
     created_at: datetime
     updated_at: datetime | None = None
 
@@ -89,6 +90,7 @@ def run_out(doc: dict) -> RunOut:
         tokens_used=doc.get("tokens_used", 0),
         steps=doc.get("steps", 0),
         state=doc.get("state", {}),
+        share_token=doc.get("share_token"),
         created_at=_utc(doc["created_at"]),
         updated_at=_utc(doc.get("updated_at")),
     )
@@ -100,4 +102,6 @@ def run_summary(doc: dict) -> dict:
         "status": doc["status"],
         "created_at": _utc(doc["created_at"]).isoformat(),
         "tokens_used": doc.get("tokens_used", 0),
+        "idea": doc.get("idea", ""),
+        "score": ((doc.get("state") or {}).get("readiness") or {}).get("total"),
     }

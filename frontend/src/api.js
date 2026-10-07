@@ -33,20 +33,31 @@ async function raw(path, opts = {}) {
 }
 const json = async (path, opts) => (await raw(path, opts)).json();
 const post = (path, body) => json(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+const del = async (path) => { await raw(path, { method: "DELETE" }); };
 
 export const api = {
   register: (b) => post("/api/auth/register", b),
   login: (b) => post("/api/auth/login", b),
   me: () => json("/api/auth/me"),
+  stats: () => json("/api/stats"),
   listProjects: () => json("/api/projects"),
   createProject: (idea) => post("/api/projects", { idea }),
   getProject: (id) => json(`/api/projects/${id}`),
+  deleteProject: (id) => del(`/api/projects/${id}`),
   createRun: (projectId) => post(`/api/projects/${projectId}/runs`),
   getRun: (id) => json(`/api/runs/${id}`),
   approve: (id) => post(`/api/runs/${id}/approve`),
   revise: (id, instruction, target) => post(`/api/runs/${id}/revise`, { instruction, target }),
   getHtml: async (id) => (await raw(`/api/runs/${id}/html`)).text(),
   screenshotUrl: async (id, vp) => URL.createObjectURL(await (await raw(`/api/runs/${id}/screenshots/${vp}`)).blob()),
+  share: (id) => post(`/api/runs/${id}/share`),
+  unshare: (id) => del(`/api/runs/${id}/share`),
+  feedback: (id) => json(`/api/runs/${id}/feedback`),
+  applyFeedback: (id, ids, target) => post(`/api/runs/${id}/feedback/apply`, { ids, target }),
+  // public (no login): shareable preview + feedback
+  publicInfo: (token) => json(`/api/public/${token}`),
+  publicHtml: async (token) => (await raw(`/api/public/${token}/html`)).text(),
+  publicFeedback: (token, body) => post(`/api/public/${token}/feedback`, body),
   // EventSource can't send headers, so the stream endpoint accepts ?token= (that endpoint only)
   streamUrl: (id) => `${API_URL}/api/runs/${id}/stream?token=${encodeURIComponent(getToken() || "")}`,
 };

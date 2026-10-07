@@ -4,7 +4,7 @@ import { api } from "../api";
 const TARGETS = [
   { id: "page", label: "Layout / page" },
   { id: "copy", label: "Copy / wording" },
-  { id: "design", label: "Colours / fonts" },
+  { id: "design", label: "Colors / fonts" },
 ];
 
 /** Shown while the run waits for approval: lets the user request a change before deploying. */

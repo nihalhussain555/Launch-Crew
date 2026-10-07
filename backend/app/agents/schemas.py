@@ -151,3 +151,33 @@ class LaunchEmail(BaseModel):
 class LaunchKit(BaseModel):
     social_posts: Annotated[list[SocialPost], _trim(3)] = Field(min_length=3, max_length=3)
     email: LaunchEmail
+
+
+
+# ---- Audience panel (synthetic user testing)
+def _score(v):
+    try:
+        return max(1, min(10, round(float(v))))
+    except (TypeError, ValueError):
+        return v
+
+
+class PanelReaction(BaseModel):
+    persona: str
+    score: Annotated[int, BeforeValidator(_score)]
+    first_impression: str = ""
+    top_objection: str = ""
+    would_sign_up: bool = False
+
+
+class PanelReport(BaseModel):
+    reactions: Annotated[list[PanelReaction], _trim(4)] = Field(min_length=3)
+    summary: str = ""
+    suggested_fix: str = ""
+    suggested_target: Literal["page", "copy", "design"] = "copy"
+
+    @field_validator("suggested_target", mode="before")
+    @classmethod
+    def _target(cls, v):
+        v = str(v or "").strip().lower()
+        return v if v in {"page", "copy", "design"} else "copy"

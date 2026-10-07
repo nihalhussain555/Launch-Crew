@@ -18,3 +18,5 @@ async def ensure_indexes(db) -> None:
     await db.runs.create_index([("project_id", 1), ("created_at", -1)])
     await db.runs.create_index([("user_id", 1), ("created_at", -1)])
     await db.run_events.create_index([("run_id", 1), ("seq", 1)], unique=True)
+    await db.runs.create_index("share_token")
+    await db.feedback.create_index([("run_id", 1), ("created_at", 1)])

@@ -13,6 +13,10 @@ class Storage(ABC):
     @abstractmethod
     async def load(self, key: str) -> bytes: ...
 
+    @abstractmethod
+    async def delete(self, key: str) -> None:
+        """Best-effort removal (default: no-op)."""
+
 
 class LocalStorage(Storage):
     def __init__(self, root: str):
@@ -35,6 +39,10 @@ class LocalStorage(Storage):
             raise FileNotFoundError(key)
         return await asyncio.to_thread(path.read_bytes)
 
+    async def delete(self, key: str) -> None:
+        path = (self.root / key).resolve()
+        if self.root.resolve() in path.parents:
+            await asyncio.to_thread(lambda: path.unlink(missing_ok=True))
 
 class MongoStorage(Storage):
     """Stores blobs in MongoDB (<16MB each). Default: survives Render's ephemeral disk across redeploys."""
@@ -46,6 +54,9 @@ class MongoStorage(Storage):
         key = f"{run_id}/{name}"
         await self.col.replace_one({"_id": key}, {"_id": key, "data": data}, upsert=True)
         return key
+
+    async def delete(self, key: str) -> None:
+        await self.col.delete_one({"_id": key})
 
     async def load(self, key: str) -> bytes:
         doc = await self.col.find_one({"_id": key})

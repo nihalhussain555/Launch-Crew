@@ -35,6 +35,8 @@ class RunState(BaseModel):
 
     iteration: int = 0
     revisions: int = 0
+    panel: dict | None = None
+    readiness: dict | None = None
     check_results: list[dict] = Field(default_factory=list)
     check_summary: dict = Field(default_factory=dict)
     critic_feedback: dict | None = None
