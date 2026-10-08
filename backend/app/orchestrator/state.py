@@ -35,6 +35,12 @@ class RunState(BaseModel):
     html_version: int = 0
     sanitizer_violations: list[str] = Field(default_factory=list)
 
+    # Workspace: every build is published as a file set plus a restorable snapshot (app/tools/splitter).
+    files: list[dict] = Field(default_factory=list)       # [{name, language, key, bytes, note}]
+    versions: list[dict] = Field(default_factory=list)    # [{v, key, bytes, at, note, errors, readiness}]
+    chat: list[dict] = Field(default_factory=list)        # [{role, text, at, target, version}]
+    note: str = ""                                        # what the next snapshot should be labelled with
+
     iteration: int = 0
     revisions: int = 0
     panel: dict | None = None

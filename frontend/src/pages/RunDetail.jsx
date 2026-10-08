@@ -4,10 +4,16 @@ import { api } from "../api";
 import AgentTrace from "../components/AgentTrace";
 import ApproveDeploy from "../components/ApproveDeploy";
 import AudiencePanel from "../components/AudiencePanel";
+import ChatEditModal from "../components/ChatEditModal";
 import CriticReport from "../components/CriticReport";
+import DebugModal from "../components/DebugModal";
+import DiffModal from "../components/DiffModal";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import FeedbackInbox from "../components/FeedbackInbox";
+import FilesModal from "../components/FilesModal";
+import HealModal from "../components/HealModal";
+import HistoryModal from "../components/HistoryModal";
 import Icon from "../components/Icon";
 import PreviewFrame from "../components/PreviewFrame";
 import ReadinessModal from "../components/ReadinessModal";
@@ -17,9 +23,21 @@ import ShareModal from "../components/ShareModal";
 import SocialPosts from "../components/SocialPosts";
 import StatusPill from "../components/StatusPill";
 import Tabs from "../components/Tabs";
+import WorkspaceModal from "../components/WorkspaceModal";
 import { useRunStream } from "../hooks/useRunStream";
 
-const REFRESH_ON = new Set(["agent_message", "check_results", "awaiting_approval", "deployed", "failed"]);
+const REFRESH_ON = new Set(["agent_message", "check_results", "awaiting_approval", "workspace_updated", "deployed", "failed"]);
+
+/** Workspace tools: every run is a set of files, a version history and a conversation. */
+const TOOLS = [
+  { id: "files", icon: "layers", label: "Files" },
+  { id: "history", icon: "book", label: "History" },
+  { id: "diff", icon: "arrowRight", label: "Compare" },
+  { id: "chat", icon: "sparkle", label: "AI edit" },
+  { id: "debug", icon: "cpu", label: "Debug" },
+  { id: "heal", icon: "refresh", label: "Self-heal" },
+  { id: "workspace", icon: "folder", label: "Project" },
+];
 
 export default function RunDetail() {
   const { runId } = useParams();
@@ -31,6 +49,8 @@ export default function RunDetail() {
   const [tab, setTab] = useState("overview");
   const [shareOpen, setShareOpen] = useState(false);
   const [scoreOpen, setScoreOpen] = useState(false);
+  const [tool, setTool] = useState("");
+  const [diffRange, setDiffRange] = useState(null);
   const timer = useRef();
   const version = useRef(0);
 
@@ -39,7 +59,7 @@ export default function RunDetail() {
   }, [runId]);
 
   useEffect(() => {
-    setRun(null); setHtml(""); setShots({}); setFeedback([]); setTab("overview"); version.current = 0;
+    setRun(null); setHtml(""); setShots({}); setFeedback([]); setTab("overview"); setTool(""); setDiffRange(null); version.current = 0;
     refresh();
   }, [refresh]);
 
@@ -94,6 +114,13 @@ export default function RunDetail() {
     ...(s.social_posts?.length ? [{ id: "launch", label: "Launch kit" }] : []),
   ];
 
+  const openTool = (id) => {
+    if (id === "diff" && !diffRange && s.html_version > 1) setDiffRange({ from: s.html_version - 1, to: s.html_version });
+    setTool(id);
+  };
+  const closeTool = () => setTool("");
+  const compare = (from, to) => { setDiffRange({ from, to }); setTool("diff"); };
+
   return (
     <>
       <div className="page-head">
@@ -109,6 +136,14 @@ export default function RunDetail() {
         </div>
       </div>
       {err && <div className="error" role="alert">{err}</div>}
+
+      <div className="ws-bar">
+        {TOOLS.map((t) => (
+          <button key={t.id} className={`btn ghost small ${tool === t.id ? "on" : ""}`} onClick={() => openTool(t.id)}>
+            <Icon name={t.icon} size={15} /> {t.label}
+          </button>
+        ))}
+      </div>
 
       <ApproveDeploy run={run} onChange={setRun} />
       <ReviseForm run={run} onChange={setRun} />
@@ -129,6 +164,14 @@ export default function RunDetail() {
 
       <ShareModal open={shareOpen} onClose={() => setShareOpen(false)} run={run} onChange={setRun} />
       <ReadinessModal open={scoreOpen} onClose={() => setScoreOpen(false)} state={s} />
+
+      <FilesModal open={tool === "files"} onClose={closeTool} run={run} />
+      <HistoryModal open={tool === "history"} onClose={closeTool} run={run} onChange={setRun} onDiff={compare} />
+      <DiffModal open={tool === "diff"} onClose={closeTool} run={run} range={diffRange} setRange={setDiffRange} />
+      <ChatEditModal open={tool === "chat"} onClose={closeTool} run={run} onChange={setRun} />
+      <DebugModal open={tool === "debug"} onClose={closeTool} run={run} onChange={setRun} />
+      <HealModal open={tool === "heal"} onClose={closeTool} run={run} />
+      <WorkspaceModal open={tool === "workspace"} onClose={closeTool} run={run} />
     </>
   );
 }

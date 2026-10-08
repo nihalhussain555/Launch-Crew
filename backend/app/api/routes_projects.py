@@ -48,7 +48,10 @@ async def delete_project(project_id: str, request: Request, db=Depends(get_db), 
     storage = request.app.state.storage
     for r in runs:
         rid, st = str(r["_id"]), r.get("state") or {}
-        for key in [st.get("html_key"), *(st.get("screenshot_keys") or {}).values()]:
+        for key in [st.get("html_key"),
+                    *(f.get("key") for f in st.get("files") or []),
+                    *(v.get("key") for v in st.get("versions") or []),
+                    *(st.get("screenshot_keys") or {}).values()]:
             if key:
                 try:
                     await storage.delete(key)

@@ -2,6 +2,7 @@ import json
 
 from app.agents import variants
 from app.agents.base import BaseAgent, extract_html, looks_like_html
+from app.orchestrator import artifacts
 from app.tools.sanitizer import sanitize_html
 
 
@@ -35,6 +36,10 @@ class EngineerAgent(BaseAgent):
 
         s.html, s.sanitizer_violations = clean, violations
         s.html_version += 1
-        s.html_key = await ctx.storage.save(ctx.run_id, "index.html", clean.encode("utf-8"))
+        files = await artifacts.publish(ctx)          # index.html + extracted assets + version snapshot
+        s.html_key = next(f["key"] for f in files if f["name"] == "index.html")
+        await ctx.emit("workspace_updated", version=s.html_version,
+                       files=[{"name": f["name"], "bytes": f["bytes"]} for f in files])
         note = f" Sanitizer removed {len(violations)} item(s)." if violations else ""
-        return f"Built index.html ({len(clean) // 1024 or 1} KB, v{s.html_version}).{note}"
+        return (f"Built index.html ({len(clean) // 1024 or 1} KB, v{s.html_version}) "
+                f"and published {len(files)} workspace file(s).{note}")

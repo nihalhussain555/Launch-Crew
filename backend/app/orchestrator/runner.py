@@ -73,8 +73,8 @@ async def launch_pipeline(app_state, run_id: str) -> None:
     except Exception as exc:  # noqa: BLE001
         await _fail(db, ctx, exc)
 
-async def revise_pipeline(app_state, run_id: str, instruction: str, target: str) -> None:
-    """Apply the user's feedback. Runs only after POST /revise flipped the run from 'awaiting_approval' to 'running'."""
+async def _ctx_for(app_state, run_id: str) -> RunContext:
+    """Rebuild the run's context (state + page) from the database, as every follow-up phase needs it."""
     db = app_state.db
     doc = await db.runs.find_one({"_id": ObjectId(run_id)})
     state = RunState.model_validate(doc["state"])
@@ -82,17 +82,48 @@ async def revise_pipeline(app_state, run_id: str, instruction: str, target: str)
                      sink=DBEventSink(db, run_id), storage=app_state.storage,
                      checkpoint=lambda c, st: _checkpoint(db, c, st),
                      tokens_used=doc.get("tokens_used", 0), steps=0)   # steps reset per phase; token budget stays cumulative
-    try:
+    if state.html_key:
         state.html = (await app_state.storage.load(state.html_key)).decode("utf-8")
+    return ctx
+
+
+async def _keep_last_good(app_state, run_id: str, ctx: RunContext, exc: Exception, label: str) -> None:
+    """A failed follow-up phase must not destroy the run: return to the gate with the last good version."""
+    msg = (str(exc) or exc.__class__.__name__)[:300]
+    log.exception("%s of run %s failed", label, run_id)
+    await app_state.db.runs.update_one({"_id": ObjectId(run_id)},
+                                       {"$set": {"status": "awaiting_approval", "updated_at": now()}})
+    await ctx.emit("agent_message", agent="system",
+                   message=f"{label} failed: {msg}. Your last version is still available to approve.")
+    await ctx.emit("awaiting_approval", message=f"{label} failed - previous version kept.",
+                   remaining_errors=ctx.state.check_summary.get("errors", 0), html_version=ctx.state.html_version)
+
+
+async def revise_pipeline(app_state, run_id: str, instruction: str, target: str) -> None:
+    """Apply the user's feedback. Runs only after POST /revise flipped the run from 'awaiting_approval' to 'running'."""
+    ctx = await _ctx_for(app_state, run_id)
+    try:
         await Orchestrator(ctx).revise(instruction, target)
     except Exception as exc:  # noqa: BLE001
-        # A failed revision must not destroy the run: go back to the approval gate with the last good checkpoint.
-        msg = (str(exc) or exc.__class__.__name__)[:300]
-        log.exception("revision of run %s failed", run_id)
-        await db.runs.update_one({"_id": ObjectId(run_id)}, {"$set": {"status": "awaiting_approval", "updated_at": now()}})
-        await ctx.emit("agent_message", agent="system", message=f"Revision failed: {msg}. Your last version is still available to approve.")
-        await ctx.emit("awaiting_approval", message="Revision failed - previous version kept.",
-                       remaining_errors=state.check_summary.get("errors", 0), html_version=state.html_version)
+        await _keep_last_good(app_state, run_id, ctx, exc, "Revision")
+
+
+async def debug_pipeline(app_state, run_id: str) -> None:
+    """Autonomous debugging: re-check the live page and repair what fails (POST /debug)."""
+    ctx = await _ctx_for(app_state, run_id)
+    try:
+        await Orchestrator(ctx).debug()
+    except Exception as exc:  # noqa: BLE001
+        await _keep_last_good(app_state, run_id, ctx, exc, "Debug pass")
+
+
+async def restore_pipeline(app_state, run_id: str, version: int) -> None:
+    """Roll back to a saved version without spending tokens (POST /restore)."""
+    ctx = await _ctx_for(app_state, run_id)
+    try:
+        await Orchestrator(ctx).restore(version)
+    except Exception as exc:  # noqa: BLE001
+        await _keep_last_good(app_state, run_id, ctx, exc, "Restore")
 
 
 async def claim_for_revision(db, run_id: str, user_id: str) -> bool:

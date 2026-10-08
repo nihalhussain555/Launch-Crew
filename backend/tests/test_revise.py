@@ -19,7 +19,7 @@ async def test_revise_page_rebuilds_and_returns_to_approval(make_ctx, monkeypatc
     s = ctx.state
     assert s.revisions == 1 and s.html_version == v + 1 and s.pending_fixes == {}
     assert "Make the hero button bigger" in s.html            # mock engineer echoes the requested change
-    assert started(events, mark) == ["copywriter", "engineer", "critic", "panel"]   # words changed -> audience re-tested
+    assert started(events, mark) == ["engineer", "critic"]   # page-only edit: the audience is not re-tested
     assert events[-1][0] == "awaiting_approval" and "deployed" not in [t for t, _ in events]
 
 
@@ -30,7 +30,7 @@ async def test_revise_copy_reruns_copywriter_then_engineer(make_ctx, monkeypatch
     await orch.run_until_approval()
     mark = len(events)
     await orch.revise("Use a friendlier headline", "copy")
-    assert started(events, mark) == ["copywriter", "engineer", "critic"]
+    assert started(events, mark) == ["copywriter", "engineer", "critic", "panel"]   # words changed -> audience re-tested
 
 
 async def test_revise_design_reruns_designer_then_engineer(make_ctx, monkeypatch):

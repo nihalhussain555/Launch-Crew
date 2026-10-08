@@ -2,6 +2,7 @@
 failures into prioritised fix instructions routed to engineer/designer/copywriter."""
 import base64
 import json
+from collections import Counter
 
 from app.agents.base import BaseAgent
 from app.agents.schemas import CriticFeedback
@@ -45,7 +46,12 @@ class CriticAgent(BaseAgent):
             msg = f"All required checks passed ({s.check_summary['warnings']} warning(s))."
             await self._visual_review(ctx, shots)
 
-        s.critic_history.append({"iteration": s.iteration, "summary": s.check_summary, "message": msg})
+        # The self-healing timeline reads this: what was found, who it was routed to, what was fixed.
+        fixes = (s.critic_feedback or {}).get("fixes", [])
+        s.critic_history.append({"iteration": s.iteration, "summary": s.check_summary, "message": msg,
+                                 "errors_before": errors, "html_version": s.html_version,
+                                 "fixes": [{"agent": f.get("agent"), "instruction": f.get("instruction")} for f in fixes],
+                                 "routed": dict(Counter(f.get("agent", "?") for f in fixes))})
         return msg
 
     async def _visual_review(self, ctx, shots: dict[str, bytes]) -> None:

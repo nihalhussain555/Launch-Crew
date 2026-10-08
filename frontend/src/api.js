@@ -54,6 +54,16 @@ export const api = {
   unshare: (id) => del(`/api/runs/${id}/share`),
   feedback: (id) => json(`/api/runs/${id}/feedback`),
   applyFeedback: (id, ids, target) => post(`/api/runs/${id}/feedback/apply`, { ids, target }),
+  // workspace: generated files, version history, diffs and AI actions
+  files: (id) => json(`/api/runs/${id}/files`),
+  fileText: async (id, name) => (await raw(`/api/runs/${id}/files/${encodeURIComponent(name)}`)).text(),
+  filesZip: async (id) => URL.createObjectURL(await (await raw(`/api/runs/${id}/files.zip`)).blob()),
+  versions: (id) => json(`/api/runs/${id}/versions`),
+  versionHtml: async (id, v) => (await raw(`/api/runs/${id}/versions/${v}/html`)).text(),
+  diff: (id, from, to) => json(`/api/runs/${id}/diff?from=${from}&to=${to}`),
+  chat: (id, text) => post(`/api/runs/${id}/chat`, { text }),
+  debug: (id) => post(`/api/runs/${id}/debug`),
+  restore: (id, version) => post(`/api/runs/${id}/restore`, { version }),
   // public (no login): shareable preview + feedback
   publicInfo: (token) => json(`/api/public/${token}`),
   publicHtml: async (token) => (await raw(`/api/public/${token}/html`)).text(),
