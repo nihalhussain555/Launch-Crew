@@ -27,6 +27,8 @@ class RunState(BaseModel):
     strategy: Strategy | None = None
     content: CopyDoc | None = None
     design: Design | None = None
+    # This run's design direction (app/agents/variants): hero shape, section order, motif, palette.
+    style: dict = Field(default_factory=dict)
 
     html: str | None = None
     html_key: str | None = None

@@ -3,6 +3,7 @@
 Responsibilities:
   * concurrency limit (asyncio.Semaphore, LLM_MAX_CONCURRENCY)
   * 429 / transient-error retries: honour `retry-after`, else exponential backoff with jitter
+  * Groq key pooling (GROQ_API_KEYS): a 429 cools down that one key and the call moves to the next
   * surfacing "rate limited, retrying" via an `on_retry` callback (-> SSE event)
   * token usage returned on every result (the run-level budget is enforced by RunContext)
 """
@@ -11,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -129,15 +131,64 @@ def _parse_retry_after(exc: Exception) -> float | None:
         return None
 
 
+@dataclass
+class _ApiKey:
+    client: Any
+    index: int
+    cooldown_until: float = 0.0
+
+
 class GroqProvider:
-    def __init__(self, settings: Settings):
+    """Groq chat completions backed by a rotating pool of API keys.
+
+    A 429 is scoped to the key that hit it, so instead of sleeping the call is retried
+    straight away on the next key that is not cooling down. The error only reaches
+    `call_with_retries` once every key is limited, and the backoff then waits for the
+    key that frees up soonest.
+    """
+
+    def __init__(self, settings: Settings, *, now: Callable[[], float] = time.monotonic):
         import groq  # imported lazily so tests/mock mode don't need the SDK
 
-        if not settings.groq_api_key:
-            raise RuntimeError("GROQ_API_KEY is not set (or set MOCK_LLM=true).")
+        pool = settings.groq_key_pool
+        if not pool:
+            raise RuntimeError(
+                "No Groq API key set. Fill GROQ_API_KEY (or a comma-separated GROQ_API_KEYS "
+                "pool) in .env, or set MOCK_LLM=true."
+            )
         self._groq = groq
+        self._now = now
+        self._default_cooldown = max(1.0, settings.llm_key_cooldown_s)
+        self._cursor = 0
         # max_retries=0: all retry logic lives in call_with_retries so it is visible + testable.
-        self._client = groq.AsyncGroq(api_key=settings.groq_api_key, timeout=settings.llm_request_timeout_s, max_retries=0)
+        self._keys = [
+            _ApiKey(groq.AsyncGroq(api_key=key, timeout=settings.llm_request_timeout_s, max_retries=0), i)
+            for i, key in enumerate(pool)
+        ]
+
+    @property
+    def key_count(self) -> int:
+        return len(self._keys)
+
+    def _order(self) -> list[_ApiKey]:
+        """Keys to try for one request, best first."""
+        now = self._now()
+        ready = [k for k in self._keys if k.cooldown_until <= now]
+        if not ready:
+            # All cooling down: make one attempt on the key that frees up first rather
+            # than burning a request per key; the caller's backoff does the waiting.
+            return [min(self._keys, key=lambda k: k.cooldown_until)]
+        start, size = self._cursor, len(self._keys)
+        self._cursor = (start + 1) % size
+        # Round-robin: spread the load so the least recently used key goes first.
+        return sorted(ready, key=lambda k: (k.index - start) % size)
+
+    def _cool_down(self, slot: _ApiKey, exc: Exception) -> float:
+        """Park a key that just returned 429 for retry-after, else a whole rate window."""
+        seconds = _parse_retry_after(exc)
+        seconds = self._default_cooldown if seconds is None else max(seconds, 1.0)
+        slot.cooldown_until = self._now() + seconds
+        return seconds
 
     async def complete(self, *, agent, model, messages, json_mode, tools, temperature, max_tokens) -> LLMResult:
         g = self._groq
@@ -147,21 +198,34 @@ class GroqProvider:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        try:
-            resp = await self._client.chat.completions.create(**kwargs)
-        except g.RateLimitError as e:
-            raise RateLimitedError(_parse_retry_after(e)) from e
-        except (g.APIConnectionError, g.APITimeoutError) as e:
-            raise TransientLLMError(f"connection error: {e}") from e
-        except g.BadRequestError as e:
-            if "json_validate_failed" in str(e) or "tool_use_failed" in str(e):
-                raise LLMOutputError(f"model produced invalid output: {e}") from e
-            raise LLMError(f"bad request: {e}") from e
-        except g.APIStatusError as e:
-            if e.status_code >= 500:
-                raise TransientLLMError(f"groq {e.status_code}", _parse_retry_after(e)) from e
-            raise LLMError(f"groq {e.status_code}: {e}") from e
 
+        waits: list[float] = []
+        for slot in self._order():
+            try:
+                resp = await slot.client.chat.completions.create(**kwargs)
+            except g.RateLimitError as e:
+                waits.append(self._cool_down(slot, e))
+                continue  # per-key limit — use another key instead of sleeping
+            except (g.APIConnectionError, g.APITimeoutError) as e:
+                raise TransientLLMError(f"connection error: {e}") from e
+            except g.BadRequestError as e:
+                if "json_validate_failed" in str(e) or "tool_use_failed" in str(e):
+                    raise LLMOutputError(f"model produced invalid output: {e}") from e
+                raise LLMError(f"bad request: {e}") from e
+            except g.APIStatusError as e:
+                if e.status_code >= 500:
+                    raise TransientLLMError(f"groq {e.status_code}", _parse_retry_after(e)) from e
+                raise LLMError(f"groq {e.status_code}: {e}") from e
+            return self._to_result(resp, model)
+
+        # Every key we tried was rate limited. Hand the shortest wait to the backoff loop.
+        retry_after = min(waits) if waits else None
+        if len(self._keys) > 1:
+            raise RateLimitedError(retry_after, f"all {len(self._keys)} Groq keys rate limited (429)")
+        raise RateLimitedError(retry_after)
+
+    @staticmethod
+    def _to_result(resp: Any, model: str) -> LLMResult:
         choice = resp.choices[0]
         msg = choice.message
         calls: list[ToolCall] = []

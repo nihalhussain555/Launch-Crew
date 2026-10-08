@@ -6,6 +6,7 @@ researcher -> strategist -> copywriter -> designer -> engineer -> [critic -> fix
 import asyncio
 from collections import defaultdict
 
+from app.agents import variants
 from app.agents.copywriter import CopywriterAgent
 from app.agents.critic import CriticAgent
 from app.agents.designer import DesignerAgent
@@ -67,6 +68,8 @@ class Orchestrator:
 
     async def run_until_approval(self) -> None:
         ctx = self.ctx
+        if not ctx.state.style:  # one design direction per run, reused by every later revision
+            ctx.state.style = variants.seed_state(ctx.run_id or ctx.state.idea)
         await ctx.checkpoint("running")
         for agent in (ResearcherAgent(), StrategistAgent(), self.copywriter, self.designer, self.engineer):
             await self._run(agent)

@@ -39,7 +39,7 @@ export default function ProjectDetail() {
       <div className="page-head">
         <div><Link to="/projects" className="muted small"><Icon name="left" size={13} /> Projects</Link><h1>{p.name}</h1><p className="muted">{p.idea}</p></div>
         <div className="row"><button className="btn primary" onClick={newRun} disabled={busy}>{busy ? "Starting…" : <><Icon name="rocket" size={16} /> New run</>}</button>
-          <button className="btn ghost danger-text" onClick={() => setDel(true)}>Delete</button></div>
+          <button className="btn ghost danger-text" onClick={() => setDel(true)} aria-label={`Delete ${p.name}`}>Delete</button></div>
       </div>
 
       {scored.length > 1 && (

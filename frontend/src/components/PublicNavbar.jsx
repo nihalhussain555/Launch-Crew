@@ -10,7 +10,7 @@ const LINKS = [
   { to: "/about", label: "About" },
   { to: "/templates", label: "Templates" },
 ];
-const THEME_ICON = { system: "monitor", light: "sun", dark: "moon" };
+const THEME_ICON = { light: "sun", dark: "moon" };
 
 export default function PublicNavbar() {
   const [scrolled, setScrolled] = useState(false);

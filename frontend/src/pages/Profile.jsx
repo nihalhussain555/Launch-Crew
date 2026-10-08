@@ -8,7 +8,7 @@ import ScoreRing from "../components/ScoreRing";
 import { useTheme } from "../theme";
 import { compact } from "../utils";
 
-const THEMES = [["system", "monitor", "System"], ["light", "sun", "Light"], ["dark", "moon", "Dark"]];
+const THEMES = [["light", "sun", "Light"], ["dark", "moon", "Dark"]];
 
 export default function Profile() {
   const { user, logout } = useAuth();
@@ -40,53 +40,58 @@ export default function Profile() {
         </div>
       </section>
 
-      <div className="profile-grid">
-        <section className="card">
+      <div className="set-grid">
+        <section className="card set-card">
           <h2>Account</h2>
-          <div className="kv"><span className="muted">Display name</span><strong>{user?.name || "Not set"}</strong></div>
-          <div className="kv"><span className="muted">Email</span><strong>{user?.email || "—"}</strong></div>
-          <div className="kv"><span className="muted">Account ID</span><strong className="mono small">{user?.id || "—"}</strong></div>
-          <p className="muted small">Name and email are managed with your account credentials. Use Settings for workspace preferences.</p>
+          <div className="set-rows">
+            <div className="set-row"><span className="set-key">Display name</span><strong className="set-val">{user?.name || "Not set"}</strong></div>
+            <div className="set-row"><span className="set-key">Email</span><strong className="set-val">{user?.email || "—"}</strong></div>
+            <div className="set-row"><span className="set-key">Account ID</span><strong className="set-val mono small">{user?.id || "—"}</strong></div>
+          </div>
+          <p className="set-note">Name and email come from your sign-in credentials. Use Settings for workspace preferences.</p>
         </section>
 
-        <section className="card">
+        <section className="card set-card">
           <h2>Workspace activity</h2>
-          {!stats ? <div className="skeleton" style={{ height: 120 }} /> : (
-            <>
-              <div className="kv"><span className="muted">Projects</span><strong>{stats.projects}</strong></div>
-              <div className="kv"><span className="muted">Runs</span><strong>{stats.runs}</strong></div>
-              <div className="kv"><span className="muted">Deployed pages</span><strong>{stats.deployed}</strong></div>
-              <div className="kv"><span className="muted">Tokens used</span><strong>{compact(stats.tokens)}</strong></div>
-              <div className="kv"><span className="muted">Avg readiness</span>
-                <strong>{stats.avg_readiness == null ? "—" : <ScoreRing value={stats.avg_readiness} size={40} stroke={5} />}</strong>
-              </div>
-            </>
+          {!stats ? <div className="skeleton" style={{ height: 150 }} /> : (
+            <div className="set-rows">
+              <div className="set-row"><span className="set-key">Projects</span><strong className="set-val">{stats.projects}</strong></div>
+              <div className="set-row"><span className="set-key">Runs</span><strong className="set-val">{stats.runs}</strong></div>
+              <div className="set-row"><span className="set-key">Deployed pages</span><strong className="set-val">{stats.deployed}</strong></div>
+              <div className="set-row"><span className="set-key">Tokens used</span><strong className="set-val">{compact(stats.tokens)}</strong></div>
+              <div className="set-row"><span className="set-key">Avg readiness</span>
+                <span className="set-val">{stats.avg_readiness == null ? <strong>—</strong> : <ScoreRing value={stats.avg_readiness} size={40} stroke={5} />}</span></div>
+            </div>
           )}
         </section>
 
-        <section className="card">
+        <section className="card set-card">
           <h2>Appearance</h2>
-          <div className="seg" role="group" aria-label="Theme">
-            {THEMES.map(([id, icon, label]) => (
-              <button key={id} className={theme === id ? "on" : ""} onClick={() => setTheme(id)} aria-pressed={theme === id}>
-                <Icon name={icon} size={16} /> {label}
-              </button>
-            ))}
+          <div className="set-rows">
+            <div className="set-row"><span className="set-key">Theme</span>
+              <span className="set-val"><div className="seg" role="group" aria-label="Theme">
+                {THEMES.map(([id, icon, label]) => (
+                  <button key={id} className={theme === id ? "on" : ""} onClick={() => setTheme(id)} aria-pressed={theme === id}>
+                    <Icon name={icon} size={16} /> {label}
+                  </button>
+                ))}
+              </div></span></div>
           </div>
-          <p className="muted small">“System” follows your device setting. Your choice is saved on this device.</p>
+          <p className="set-note">Your choice is saved on this device and applied the next time you open the app.</p>
         </section>
 
-        <section className="card">
+        <section className="card set-card">
           <h2>Session</h2>
-          <p className="muted small">Signed in on this browser. Signing out clears your local session token.</p>
-          <div className="row wrap">
-            <button className="btn ghost danger-text" onClick={() => setOut(true)}><Icon name="logout" size={16} /> Sign out</button>
-            <Link to="/settings" className="btn ghost">All settings</Link>
+          <div className="set-rows">
+            <div className="set-row"><span className="set-key">Signed in on</span><strong className="set-val">This browser</strong></div>
+            <div className="set-row"><span className="set-key">Sign out</span>
+              <span className="set-val"><button className="side-logout compact" onClick={() => setOut(true)}><Icon name="logout" size={15} /> Sign out</button></span></div>
           </div>
+          <p className="set-note">Signing out clears the saved session token on this device.</p>
         </section>
       </div>
 
-      <ConfirmModal open={out} onClose={() => setOut(false)} onConfirm={logout} confirmLabel="Sign out"
+      <ConfirmModal open={out} onClose={() => setOut(false)} onConfirm={logout} danger confirmLabel="Sign out"
         title="Sign out of Launch Crew?" message="You will need to sign in again to see your projects and runs." />
     </>
   );

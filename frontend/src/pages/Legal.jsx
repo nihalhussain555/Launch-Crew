@@ -35,7 +35,7 @@ const DOCS = {
       "This application does not set advertising or tracking cookies. It uses a small amount of first-party browser storage so you stay signed in and keep your appearance choice.",
     points: [
       ["Session", "One storage key holds your authentication token so the app can restore your session on the next visit."],
-      ["Appearance", "One storage key remembers light, dark, or system theme, and whether you finished the product tour."],
+      ["Appearance", "One storage key remembers whether you chose the light or dark theme, and whether you finished the product tour."],
       ["No third-party trackers", "We do not embed advertising pixels, cross-site trackers, or marketing cookies."],
       ["Clearing it", "Sign out, or clear site data in your browser. Both remove local entries; clearing site data also signs you out."],
     ],

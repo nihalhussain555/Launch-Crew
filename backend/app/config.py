@@ -23,11 +23,17 @@ class Settings(BaseSettings):
     # LLM (Groq). Model names intentionally have NO defaults: set them in .env.
     mock_llm: bool = True
     groq_api_key: str = ""
+    # Optional comma-separated pool. Several keys let the client rotate between
+    # them and cool down only the key that returned 429, so one rate limit does
+    # not stall a run. Merged with groq_api_key; duplicates ignored.
+    groq_api_keys: str = ""
     groq_model: str = ""
     groq_fast_model: str = ""
     groq_vision_model: str = ""
     llm_max_concurrency: int = 2
     llm_max_retries: int = 5
+    # How long a key stays parked after a 429 that carries no retry-after header.
+    llm_key_cooldown_s: float = 60.0
     llm_request_timeout_s: float = 90.0
     llm_backoff_base_s: float = 1.0
     llm_backoff_max_s: float = 30.0
@@ -58,12 +64,25 @@ class Settings(BaseSettings):
     def allowed_origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.allowed_origin.split(",") if o.strip()]
 
+    @property
+    def groq_key_pool(self) -> list[str]:
+        """Keys to rotate between: GROQ_API_KEY plus any comma-separated GROQ_API_KEYS,
+        deduplicated in the order they were written."""
+        seen: set[str] = set()
+        pool: list[str] = []
+        for chunk in f"{self.groq_api_key},{self.groq_api_keys}".split(","):
+            key = chunk.strip()
+            if key and key not in seen:
+                seen.add(key)
+                pool.append(key)
+        return pool
+
     def validate_for_runtime(self) -> None:
         """Fail fast on configuration that would otherwise break mid-run."""
         if self.app_env == "production" and self.jwt_secret == DEFAULT_JWT_SECRET:
             raise RuntimeError("JWT_SECRET must be changed in production.")
         if not self.mock_llm:
-            missing = [n for n, v in (("GROQ_API_KEY", self.groq_api_key), ("GROQ_MODEL", self.groq_model)) if not v]
+            missing = [n for n, v in (("GROQ_API_KEY", self.groq_key_pool), ("GROQ_MODEL", self.groq_model)) if not v]
             if missing:
                 raise RuntimeError(
                     f"MOCK_LLM=false but {', '.join(missing)} not set. Set them in .env "

@@ -84,12 +84,6 @@ const PATHS = {
     </>
   ),
   hash: <path d="M9 4.5 7.4 19.5M16.6 4.5 15 19.5M4.4 9h15M3.8 15h15" />,
-  contrast: (
-    <>
-      <circle cx="12" cy="12" r="8" />
-      <path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" stroke="none" />
-    </>
-  ),
   logout: (
     <>
       <path d="M12 4H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5" />
@@ -164,7 +158,6 @@ const PATHS = {
       <path d="m4 12.5 8 4 8-4M4 16.5 12 20l8-3.5" />
     </>
   ),
-  plug: <path d="M9 3v5M15 3v5M7 8h10v2.5a5 5 0 0 1-10 0V8zM12 15.5V21" />,
   chart: (
     <>
       <path d="M5 20V11M11 20V5M17 20v-6" />
@@ -197,12 +190,6 @@ const PATHS = {
       <path d="M12 17h.01" />
     </>
   ),
-  external: (
-    <>
-      <path d="M14 5h5v5M19 5l-8 8" />
-      <path d="M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5" />
-    </>
-  ),
   star: <path d="M12 3.7l2.55 5.17 5.7.83-4.12 4.02.97 5.68L12 16.87l-5.1 2.53.97-5.68L3.75 9.7l5.7-.83z" />,
   starFilled: (
     <path
@@ -215,12 +202,6 @@ const PATHS = {
       <path d="M12 4.6 21 19.4H3z" />
       <path d="M12 10v4" />
       <path d="M12 16.6h.01" />
-    </>
-  ),
-  bell: (
-    <>
-      <path d="M6 9.5a6 6 0 0 1 12 0c0 4.5 1.8 5.5 1.8 5.5H4.2S6 14 6 9.5z" />
-      <path d="M10 19a2 2 0 0 0 4 0" />
     </>
   ),
 };

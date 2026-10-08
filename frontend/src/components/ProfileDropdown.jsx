@@ -4,8 +4,8 @@ import { useAuth } from "../auth";
 import Icon from "./Icon";
 
 /** Avatar button + menu in the app topbar. Closes on outside click, Esc or route change. */
-export default function ProfileDropdown() {
-  const { user, logout } = useAuth();
+export default function ProfileDropdown({ onSignOut }) {
+  const { user } = useAuth();
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -23,7 +23,7 @@ export default function ProfileDropdown() {
   const initial = name.trim().charAt(0).toUpperCase();
   const close = () => setOpen(false);
   const go = (to) => { close(); nav(to); };
-  const signOut = () => { close(); logout(); };
+  const signOut = () => { close(); onSignOut(); };
 
   return (
     <div className="dropdown" ref={ref}>

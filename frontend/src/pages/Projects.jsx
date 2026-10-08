@@ -52,7 +52,7 @@ export default function Projects() {
             <div className="row wrap">
               <Link to={`/projects/${p.id}`} className="btn ghost small">Open</Link>
               <button className="btn ghost small" onClick={() => newRun(p)}>New run</button>
-              <button className="btn ghost small danger-text" onClick={() => setTarget(p)}>Delete</button>
+              <button className="btn ghost small danger-text" onClick={() => setTarget(p)} aria-label={`Delete ${p.name}`}>Delete</button>
             </div>
           </article>
         ))}
