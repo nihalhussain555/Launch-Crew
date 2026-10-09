@@ -1,5 +1,8 @@
 """Deterministic offline provider (MOCK_LLM=true). Returns schema-valid output for every agent,
-so the full pipeline (including the Playwright critic and deploy gate) works with no API keys."""
+so the full pipeline (including the Playwright critic and deploy gate) works with no API keys.
+
+Revisions go through app.llm.mock_edits, which reads the FIXES / CURRENT_JSON / CURRENT_HTML
+blocks and applies the requested change mechanically, so an edit visibly alters the page offline."""
 from __future__ import annotations
 
 import html
@@ -7,8 +10,9 @@ import json
 import re
 
 from app.agents import variants
+from app.llm import mock_edits as edits
 from app.llm.client import LLMResult, ToolCall, Usage
-from app.utils.color import hex_to_rgb
+from app.utils.color import mix
 
 STOP = {"a", "an", "the", "for", "to", "of", "that", "and", "with", "who", "in", "on", "my", "your", "app", "tool"}
 
@@ -36,12 +40,6 @@ def _name(idea: str) -> str:
 def _audience(idea: str) -> str:
     m = re.search(r"\bfor\s+(.+)$", idea, re.I)
     return m.group(1).strip().rstrip(".") if m else "busy people"
-
-
-def _mix(a: str, b: str, t: float) -> str:
-    """Blend two hex colours (`t` 0..1 towards b) so variant bands/tints stay in palette."""
-    ra, rb = hex_to_rgb(a), hex_to_rgb(b)
-    return "#" + "".join(f"{round(ra[i] + (rb[i] - ra[i]) * t):02x}" for i in range(3))
 
 
 def _esc(v: str) -> str:
@@ -165,8 +163,8 @@ def build_page(payload: dict) -> str:
     p, f = d["palette"], d["fonts"]
     e = _esc
 
-    band = _mix(p["background"], p["surface"], 0.55)
-    line = _mix(p["background"], p["text"], 0.16)
+    band = mix(p["background"], p["surface"], 0.55)
+    line = mix(p["background"], p["text"], 0.16)
     tokens = {
         "bg": p["background"], "surface": p["surface"], "text": p["text"], "muted": p["muted_text"],
         "primary": p["primary"], "onprimary": p["primary_text"], "accent": p["accent"],
@@ -236,7 +234,6 @@ def build_page(payload: dict) -> str:
 <body>
 <header id="hero" class="hero hero-{direction.hero}"><div class="wrap">{hero_inner}</div></header>
 <main>{body}</main>
-<!--revision-anchor-->
 <footer><div class="wrap">&copy; {e(c["product_name"])}. Built with Launch Crew.</div></footer>
 <script>document.getElementById('signup').addEventListener('submit',function(ev){{ev.preventDefault();document.getElementById('msg').textContent="Thanks! You're on the list.";}});</script>
 </body></html>"""
@@ -274,7 +271,7 @@ class MockProvider:
                             "goals": ["Save time", "Feel in control"], "frustrations": ["Tools that assume a 9-to-5 life", "Complex onboarding"]},
                 "key_messages": [f"Built specifically for {aud}", "Useful in under a minute", "Private, calm and distraction-free"]})
         elif agent == "copywriter":
-            text = json.dumps({
+            default = {
                 "product_name": name[:40], "headline": f"{name}, made for {aud}"[:100],
                 "subheadline": f"{idea.rstrip('.')[:150]} - simple, fast and finally designed around you."[:215],
                 "features": [
@@ -285,23 +282,26 @@ class MockProvider:
                     {"question": "Who is this for?", "answer": f"Anyone in the group: {aud}."},
                     {"question": "Is it free to try?", "answer": "Join the waitlist and be first to get early access."},
                     {"question": "How is my data handled?", "answer": "We collect the minimum and never sell it."}],
-                "cta": {"label": "Get early access", "supporting_text": "Join the waitlist - we will email you the moment we launch."}})
+                "cta": {"label": "Get early access", "supporting_text": "Join the waitlist - we will email you the moment we launch."}}
+            blob = _all_text(messages)
+            current, fixes = edits.current_json(blob), edits.fixes_from(blob)
+            text = json.dumps(edits.apply_copy(current, fixes) if current and fixes else default)
         elif agent == "designer":
             # The direction carries the run's palette/fonts; re-emitting it keeps designer and
             # Engineer agrees, and revisions reuse it instead of re-skinning the page.
-            direction = _direction_from(_all_text(messages))
-            text = json.dumps({"palette": dict(direction["palette"]), "fonts": dict(direction["fonts"]),
-                               "layout_style": direction["layout_style"]})
+            blob = _all_text(messages)
+            direction = _direction_from(blob)
+            design = {"palette": dict(direction["palette"]), "fonts": dict(direction["fonts"]),
+                      "layout_style": direction["layout_style"]}
+            current, fixes = edits.current_json(blob), edits.fixes_from(blob)
+            text = json.dumps(edits.apply_design(current, fixes) if current and fixes else design)
         elif agent == "engineer":
             blob = _all_text(messages)
-            m = re.search(r"INPUT_JSON:\s*(\{.*\})", blob)
+            m = re.search(r"INPUT_JSON:\s*(\{[^\n]*)", blob)
             page = build_page(json.loads(m.group(1)))
-            fx = re.search(r"FIXES \(apply all, keep everything else unchanged\):\n(.*?)\nCURRENT_HTML:", blob, re.S)
-            notes = re.findall(r"^- (.+)$", fx.group(1), re.M) if fx else []
-            if notes:  # mock only: make a requested revision visible so the feature can be demoed offline
-                page = page.replace("<!--revision-anchor-->",
-                                    f'<section id="revision-note"><div class="wrap">'
-                                    f'<p class="sub">Revision applied: {html.escape(notes[0])}</p></div></section>')
+            fixes, previous = edits.fixes_from(blob), edits.current_html(blob)
+            if fixes and previous:      # patch mode: the page is the one the user is looking at
+                page = edits.apply_page(page, previous, fixes)
             text = "```html\n" + page + "\n```"
         elif agent == "critic":
             text = json.dumps({"summary": "Automated checks found issues to fix.", "fixes": [

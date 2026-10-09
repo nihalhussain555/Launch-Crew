@@ -76,18 +76,29 @@ def test_versions_track_the_current_build(built):
 
 
 def test_chat_edits_the_page_and_answers_in_thread(built):
-    client, h, rid, _ = built
+    client, h, rid, run = built
+    before = client.get(f"/api/runs/{rid}/html", headers=h).text
     res = client.post(f"/api/runs/{rid}/chat", headers=h, json={"text": "Make the headline friendlier"})
     assert res.status_code == 202
     run = client.get(f"/api/runs/{rid}", headers=h).json()
     assert run["status"] == "awaiting_approval"
     assert run["state"]["html_version"] == 2
+    served = client.get(f"/api/runs/{rid}/html", headers=h).text
+    assert served != before and "Finally," in served        # the ask is visible in the previewed page
     thread = run["state"]["chat"]
     assert [m["role"] for m in thread] == ["user", "assistant"]
     assert thread[0]["target"] == "copy"                      # "headline" routes to the copywriter
     assert "v2" in thread[1]["text"]
     assert [v["v"] for v in run["state"]["versions"]] == [1, 2]
     assert run["state"]["versions"][-1]["note"].startswith("copy:")
+
+
+def test_chat_recolours_the_served_page(built):
+    client, h, rid, _ = built
+    before = client.get(f"/api/runs/{rid}/html", headers=h).text
+    client.post(f"/api/runs/{rid}/chat", headers=h, json={"text": "Make the button colour #0F766E"})
+    served = client.get(f"/api/runs/{rid}/html", headers=h).text
+    assert served != before and "#0f766e" in served.lower()
 
 
 def test_diff_between_two_versions(built):

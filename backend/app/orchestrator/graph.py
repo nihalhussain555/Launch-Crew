@@ -24,11 +24,15 @@ from app.tools.sanitizer import sanitize_html
 TARGET_AGENT = {"page": "engineer", "copy": "copywriter", "design": "designer"}
 
 # Conversational editing: map a plain-language request to the agent that owns the change.
+# Styling words are checked first, so "add more spacing" goes to the Designer and not the Copywriter.
 TARGET_HINTS = (
-    ("copy", ("word", "headline", "copy", "text", "say", "tagline", "tone", "english", "rewrite",
-              "title", "cta", "button label", "faq", "spell", "shorter", "punchier")),
-    ("design", ("colour", "color", "font", "palette", "background", "look", "style", "theme",
-                "spacing", "bigger", "smaller", "dark", "light mode", "type")),
+    ("design", ("colour", "color", "palette", "background", "theme", "dark", "light mode", "font", "typeface",
+                "spacing", "padding", "margin", "bigger", "smaller", "larger", "wider", "narrower", "rounded",
+                "sharp", "centre", "center", "align", "look", "style", "type")),
+    ("copy", ("word", "words", "headline", "subheadline", "tagline", "copy", "text", "say", "rewrite", "tone",
+              "title", "cta", "button label", "faq", "question", "feature", "benefit", "spell", "english",
+              "shorter", "punchier", "friendly", "formal", "professional", "jargon", "add", "include", "remove",
+              "delete", "mention")),
 )
 
 

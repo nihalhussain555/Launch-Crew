@@ -31,6 +31,12 @@ def contrast_ratio(fg, bg) -> float:
     return (hi + 0.05) / (lo + 0.05)
 
 
+def mix(a: str, b: str, t: float) -> str:
+    """Blend two hex colours (`t` 0..1 towards b), so derived tints and shades stay in palette."""
+    ra, rb = hex_to_rgb(a), hex_to_rgb(b)
+    return "#" + "".join(f"{round(ra[i] + (rb[i] - ra[i]) * t):02x}" for i in range(3))
+
+
 def is_large_text(font_px: float, bold: bool) -> bool:
     """WCAG 'large text': >=24px, or >=18.66px (14pt) and bold."""
     return font_px >= 24 or (bold and font_px >= 18.66)

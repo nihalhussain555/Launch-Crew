@@ -134,7 +134,8 @@ def test_file_text_rejects_unknown_names():
 @pytest.mark.parametrize("text,target", [
     ("Make the headline punchier", "copy"),
     ("try a warmer colour and a different font", "design"),
-    ("add a pricing table", "page"),
+    ("add a pricing table", "copy"),
+    ("add more spacing between the sections", "design"),
     ("", "page"),
     ("ship it", "page"),
 ])
