@@ -6,20 +6,31 @@ from pydantic import BaseModel, Field
 
 from app.core.deps import get_current_user, get_db, get_settings_dep
 from app.db.models import RunOut, oid, run_out
-from app.orchestrator.graph import infer_target
-from app.orchestrator.runner import (claim_for_deploy, claim_for_revision, debug_pipeline, launch_pipeline,
-                                     restore_pipeline, revise_pipeline)
+from app.orchestrator.graph import AUDIT_ORDER, infer_target
+from app.orchestrator.runner import (audit_pipeline, claim_for_deploy, claim_for_revision, debug_pipeline,
+                                     launch_pipeline, repair_pipeline, restore_pipeline, revise_pipeline)
 from app.tools import differ
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
 MEDIA = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
-         ".js": "text/javascript; charset=utf-8", ".md": "text/markdown; charset=utf-8"}
+         ".js": "text/javascript; charset=utf-8", ".md": "text/markdown; charset=utf-8",
+         ".py": "text/x-python; charset=utf-8"}
+
+AuditKind = Literal["security", "seo", "accessibility", "performance", "dependency", "tests"]
 
 
 class ReviseIn(BaseModel):
     instruction: str = Field(min_length=3, max_length=500)
     target: Literal["page", "copy", "design"] = "page"
+
+
+class AuditIn(BaseModel):
+    """Which audit agents to run; defaults to all six. Unknown names are rejected by the model."""
+    agents: list[AuditKind] = Field(default_factory=lambda: list(AUDIT_ORDER))
+
+    def kinds(self) -> list[str]:
+        return [k for k in AUDIT_ORDER if k in set(self.agents)]
 
 
 class ChatIn(BaseModel):
@@ -213,3 +224,56 @@ async def restore(run_id: str, body: RestoreIn, request: Request, background: Ba
         raise HTTPException(409, "Run is not awaiting approval")
     background.add_task(restore_pipeline, request.app.state, run_id, body.version)
     return run_out(await own_run(db, run_id, user))
+
+
+@router.post("/{run_id}/audit", response_model=RunOut, status_code=202)
+async def audit(run_id: str, body: AuditIn, request: Request, background: BackgroundTasks, db=Depends(get_db),
+                user=Depends(get_current_user)):
+    """Run the audit crew against the live page. Deterministic, no LLM, so it costs no tokens."""
+    await own_run(db, run_id, user)
+    if not body.kinds():
+        raise HTTPException(422, "Pick at least one audit")
+    if not await claim_for_revision(db, run_id, str(user["_id"])):
+        raise HTTPException(409, "Run is not awaiting approval")
+    background.add_task(audit_pipeline, request.app.state, run_id, body.kinds())
+    return run_out(await own_run(db, run_id, user))
+
+
+@router.post("/{run_id}/audit/repair", response_model=RunOut, status_code=202)
+async def audit_repair(run_id: str, body: AuditIn, request: Request, background: BackgroundTasks,
+                       db=Depends(get_db), settings=Depends(get_settings_dep), user=Depends(get_current_user)):
+    """Apply the current audits' fix instructions, rebuild the page, then re-run those same audits."""
+    run = await own_run(db, run_id, user)
+    state = run.get("state", {})
+    if state.get("revisions", 0) >= settings.max_revisions:
+        raise HTTPException(429, f"Revision limit reached ({settings.max_revisions} per run). Approve this version or start a new run.")
+    current = state.get("html_version", 0)
+    open_findings = [k for k in body.kinds()
+                     if (state.get("audits", {}).get(k) or {}).get("version") == current
+                     and (state.get("audits", {}).get(k) or {}).get("fixes")]
+    if not open_findings:
+        raise HTTPException(409, "No current audit findings to repair - run the audits first.")
+    if not await claim_for_revision(db, run_id, str(user["_id"])):
+        raise HTTPException(409, "Run is not awaiting approval")
+    background.add_task(repair_pipeline, request.app.state, run_id, open_findings)
+    return run_out(await own_run(db, run_id, user))
+
+
+@router.get("/{run_id}/tests")
+async def get_tests(run_id: str, db=Depends(get_db), user=Depends(get_current_user)):
+    """The generated suite's result: pass/fail counts and every case, from the run that executed it."""
+    tests = (await own_run(db, run_id, user)).get("state", {}).get("tests")
+    if not tests:
+        raise HTTPException(404, "No generated test suite yet - run the tester audit first")
+    return {k: v for k, v in tests.items() if k != "file"}
+
+
+@router.get("/{run_id}/tests/file")
+async def get_tests_file(run_id: str, db=Depends(get_db), user=Depends(get_current_user)):
+    """The generated regression suite as a downloadable Python file."""
+    tests = (await own_run(db, run_id, user)).get("state", {}).get("tests") or {}
+    entry = tests.get("file") or {}
+    if not entry.get("text"):
+        raise HTTPException(404, "No generated test suite yet - run the tester audit first")
+    return Response(entry["text"], media_type=MEDIA[".py"],
+                    headers={"content-disposition": 'attachment; filename="test_page.py"'})

@@ -52,6 +52,10 @@ class RunState(BaseModel):
     pending_fixes: dict[str, list[str]] = Field(default_factory=dict)
     screenshot_keys: dict[str, str] = Field(default_factory=dict)
 
+    # On-demand audits (app/agents/audits.py): each report records the html_version it measured.
+    audits: dict[str, dict] = Field(default_factory=dict)
+    tests: dict | None = None                                 # generated suite + the result of running it
+
     social_posts: list[dict] = Field(default_factory=list)
     email: dict | None = None
     deploy_url: str | None = None

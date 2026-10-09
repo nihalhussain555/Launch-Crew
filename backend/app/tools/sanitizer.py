@@ -25,6 +25,24 @@ CSS_IMPORT = re.compile(r"@import[^;]*;?", re.I)
 REMOVE_TAGS = ["iframe", "object", "embed", "base", "applet", "frame", "frameset", "portal"]
 
 
+VOID_TAGS = {"meta", "link", "img", "input", "source", "track", "br", "hr", "area", "col", "wbr"}
+
+
+def _remove(el) -> None:
+    """Delete an element: fully for containers, but keeping the children of a void tag.
+
+    html.parser treats a self-closed void tag (`<meta .../>`) as a container and nests the siblings
+    that follow it inside it, so decomposing one would take the rest of the head with it. A void
+    element can hold nothing legitimate, so its children are the parse artefacts to rescue.
+    """
+    if el.name in VOID_TAGS:
+        for child in list(el.contents):
+            el.insert_before(child)
+        el.extract()
+    else:
+        el.decompose()
+
+
 def _clean_css(css: str, violations: list[str]) -> str:
     new = CSS_IMPORT.sub("", css)
     new = CSS_REMOTE_URL.sub("none", new)
@@ -42,23 +60,25 @@ def sanitize_html(raw: str) -> tuple[str, list[str]]:
 
     for tag in soup.find_all(REMOVE_TAGS):
         violations.append(f"Removed <{tag.name}>")
-        tag.decompose()
+        _remove(tag)
 
     for s in soup.find_all("script"):
         if s.get("src"):
             violations.append(f"Removed external script: {s.get('src')[:80]}")
-            s.decompose()
+            _remove(s)
         elif BANNED_JS.search(s.string or s.get_text() or ""):
             violations.append("Removed inline script with network/storage access")
-            s.decompose()
+            _remove(s)
 
     for link in soup.find_all("link"):
         violations.append(f"Removed <link rel={link.get('rel')}> (external resources not allowed)")
-        link.decompose()
+        _remove(link)
 
-    for m in soup.find_all("meta"):
-        if (m.get("http-equiv") or "").lower() in {"refresh", "content-security-policy"}:
-            m.decompose()
+    # Decide first, remove second: a self-closed void tag (`<meta .../>`) makes html.parser nest the
+    # siblings that follow it inside it, so decomposing one can clear the tags still in the loop.
+    for m in [m for m in soup.find_all("meta")
+              if m.attrs and (m.get("http-equiv") or "").lower() in {"refresh", "content-security-policy"}]:
+        _remove(m)
 
     for st in soup.find_all("style"):
         if st.string is not None or st.get_text():
@@ -71,7 +91,7 @@ def sanitize_html(raw: str) -> tuple[str, list[str]]:
             if img.name == "input":
                 del img["src"]
             else:
-                img.decompose()
+                _remove(img)
     for img in soup.find_all("img"):
         if img.get("srcset"):
             del img["srcset"]

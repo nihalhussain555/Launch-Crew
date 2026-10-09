@@ -1,8 +1,13 @@
 import Icon from "./Icon";
 
 /* Agent roles + event kinds map onto the custom Icon set (no emoji). */
-const ROLE = { researcher: "search", strategist: "target", copywriter: "book", designer: "layers", engineer: "cpu", critic: "shield", panel: "user", launcher: "rocket" };
-const cap = (s = "") => s.charAt(0).toUpperCase() + s.slice(1);
+const ROLE = { researcher: "search", strategist: "target", copywriter: "book", designer: "layers", engineer: "cpu",
+  critic: "shield", panel: "user", launcher: "rocket", security: "lock", seo: "globe", accessibility: "eye",
+  performance: "chart", dependency: "workflow", tester: "check" };
+const AUDIT_ICON = { security: "lock", seo: "globe", accessibility: "eye", performance: "chart",
+  dependency: "workflow", tests: "check" };
+const NAME = { seo: "SEO" };
+const cap = (s = "") => NAME[s] || s.charAt(0).toUpperCase() + s.slice(1);
 
 function describe(ev) {
   const d = ev.data;
@@ -17,6 +22,8 @@ function describe(ev) {
     case "check_results": return { icon: "shield", title: `Browser checks (review ${d.iteration})`,
       body: `${d.summary.errors} error(s), ${d.summary.warnings} warning(s) of ${d.summary.total} checks`, tone: d.summary.errors ? "warn" : "ok" };
     case "critic_feedback": return { icon: "book", title: "Critic feedback", body: d.summary, tone: "warn" };
+    case "audit_report": return { icon: AUDIT_ICON[d.audit.kind] || "audit", title: `${d.audit.label} · v${d.audit.version}`,
+      body: `${d.audit.headline} Score ${d.audit.score}/100.`, tone: d.audit.errors ? "err" : d.audit.warnings ? "warn" : "ok" };
     case "screenshot_ready": return { icon: "eye", title: `Screenshot ready (${d.viewport})`, tone: "tool" };
     case "awaiting_approval": return { icon: "lock", title: "Waiting for your approval", body: d.message, tone: "warn" };
     case "deployed": return { icon: "rocket", title: "Deployed", body: d.url, tone: "ok" };

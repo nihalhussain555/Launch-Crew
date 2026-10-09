@@ -511,3 +511,32 @@ textarea{resize:vertical}.search-input{max-width:420px}
 .crash-card{width:min(720px,100%);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:26px;display:flex;flex-direction:column;gap:12px;align-items:flex-start}
 .crash-card h1{font-size:22px;margin:2px 0 0}
 .crash-detail{width:100%;max-height:240px;overflow:auto;margin:0;padding:13px 15px;border-radius:12px;background:var(--surface-2);border:1px solid color-mix(in srgb,var(--err) 30%,var(--border));color:var(--err);font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap}
+
+/* ===== crew audits + environment manager ===== */
+.audit-picker{display:grid;grid-template-columns:repeat(auto-fill,minmax(236px,1fr));gap:8px;margin:14px 0}
+.audit-chip{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2)}
+.audit-chip.on{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 8%,var(--surface))}
+.audit-chip label{flex-direction:row;align-items:center;gap:8px;font-size:14px;min-width:0}
+.audit-chip input[type=checkbox]{flex:none;width:15px;height:15px;accent-color:var(--primary)}
+.link-btn{font:inherit;font-weight:600;display:inline-flex;align-items:center;gap:6px;min-width:0;border:0;background:none;padding:0;color:var(--text);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.link-btn:hover{color:var(--primary);text-decoration:none}
+.finding-fix{display:flex;gap:5px;align-items:flex-start;margin-top:3px;color:var(--primary);line-height:1.45}
+.audit-repair{gap:12px;flex-wrap:wrap;margin-top:12px;padding:11px 12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
+.env-summary{margin:10px 0 0}
+.env-advice{margin:12px 0}
+.env-filter{max-width:340px;margin:14px 0 4px}
+.env-group{margin:16px 0 0}
+.env-group h3{margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.env-list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+.env-row{padding:10px 12px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+.env-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.env-name{font:600 12.5px/1.4 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.02em}
+.env-val{margin:6px 0 0;font-size:13.5px;font-weight:600;overflow-wrap:anywhere}
+.env-val.unset{color:var(--muted);font-weight:500;font-style:italic}
+.env-note{margin:4px 0 0;color:var(--muted);font-size:12.5px;line-height:1.5}
+.env-template-title{margin:0}
+.env-template{max-height:300px}
+@media (max-width:640px){
+.audit-picker,.env-list{grid-template-columns:1fr}
+.audit-chip{flex-wrap:wrap}
+}

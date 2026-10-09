@@ -452,14 +452,192 @@ def _design_edit(pal: dict, fonts: dict, fix: str) -> None:
 # ----------------------------------------------------------------- engineer
 def apply_page(page: str, current_html: str, fixes: list[str]) -> str:
     rules = _read_overrides(current_html)
+    page = _carry_over(page, current_html)
+    guard = _MEDIA_GUARD.search(current_html or "")
+    guard_text = guard.group(0) if guard else ""
     for fix in fixes:
-        for key, value in _page_rules(fix).items():
-            rules[key] = value
-    css = _render(rules)
+        page = _patch_markup(page, fix)
+        for source in (_page_rules(fix), _literal_rules(fix)):
+            for key, value in source.items():
+                rules[key] = value
+        if _reduced_motion.search(fix):
+            guard_text = _GUARD_TEXT
+    if 'class="skip-link"' in page:
+        for key, value in _SKIP_RULES.items():
+            rules.setdefault(key, value)
+    css = _render(rules) + guard_text
     if not css:
         return page
     i = page.rfind("</style>")
     return page if i == -1 else f"{page[:i]}/*launch-overrides*/{css}/*end-launch-overrides*/{page[i:]}"
+
+
+# ------------------------------------------------------------------ markup patches
+# An audit spells out the exact tag or element it wants ("Add in <head>: <meta ...>"), so the mock
+# can insert that literal markup. A real model would rewrite the document; this only ever adds the
+# allowlisted elements below, never a script the instruction named in passing.
+_HEAD_ADD = re.compile(r"add in <head>\s*:?\s*(.*)", re.I | re.S)
+_AFTER_BODY = re.compile(r"insert (?:immediately )?after the opening <body> tag\s*:?\s*(.*)", re.I | re.S)
+_HEAD_TAG = re.compile(r"""<meta\b[^<>]*>|<title\b[^<>]*>[^<>]*</title>|"""
+                       r"""<script\b[^<>]*application/ld\+json[^<>]*>[^<>]*</script>""", re.I)
+_ANCHOR_TAG = re.compile(r"<a\b[^<>]*>[^<>]*</a>", re.I)
+_UNSAFE_TAG = re.compile(r"javascript\s*:|\son[a-z]+\s*=", re.I)
+_MEDIA_GUARD = re.compile(r"@media\s*\(prefers-reduced-motion[^{}]*\{(?:[^{}]|\{[^{}]*\})*\}", re.I | re.S)
+_reduced_motion = re.compile(r"prefers-reduced-motion", re.I)
+_CSS_BLOCK = re.compile(r"([^\s{};]+)\{([^{}]*)\}")
+_GUARD_TEXT = "@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important;" \
+              "scroll-behavior:auto!important}}"
+_SKIP_RULES = {(".skip-link", "position"): "absolute", (".skip-link", "left"): "-9999px",
+               (".skip-link", "top"): "0", (".skip-link", "z-index"): "99",
+               (".skip-link:focus", "left"): "12px", (".skip-link:focus", "top"): "12px",
+               (".skip-link:focus", "background"): "var(--primary)",
+               (".skip-link:focus", "color"): "var(--on-primary)",
+               (".skip-link:focus", "padding"): "12px 18px", (".skip-link:focus", "min-height"): "44px",
+               (".skip-link:focus", "border-radius"): "8px"}
+
+
+def _attr(tag: str, name: str) -> str:
+    m = re.search(rf'{name}\s*=\s*"([^"]*)"', tag, re.I) or re.search(rf"{name}\s*=\s*'([^']*)'", tag, re.I)
+    return m.group(1) if m else ""
+
+
+def _patch_markup(page: str, fix: str) -> str:
+    for patch in (_add_head_tags, _add_main, _add_skip_link, _demote_extra_h1):
+        page = patch(page, fix)
+    return page
+
+
+def _add_head_tags(page: str, fix: str) -> str:
+    m = _HEAD_ADD.search(fix)
+    if not m:
+        return page
+    add = "".join(t for t in (_void_open(x) for x in _HEAD_TAG.findall(m.group(1)))
+                  if not _UNSAFE_TAG.search(t) and not _owned_by_sanitizer(t) and not _already_in(page, t))
+    if not add:
+        return page
+    i = page.rfind("</head>")
+    return page if i == -1 else f"{page[:i]}{add}{page[i:]}"
+
+
+def _attrs_of(tag: str) -> dict:
+    out = {k.lower(): v for k, v in re.findall(r'([a-zA-Z0-9_:.-]+)\s*=\s*"([^"]*)"', tag)}
+    out.update({k.lower(): v for k, v in re.findall(r"([a-zA-Z0-9_:.-]+)\s*=\s*'([^']*)'", tag)})
+    return out
+
+
+def _already_in(page: str, tag: str) -> bool:
+    """Does the page already carry this tag? Meta tags match on their key, JSON-LD on its type.
+
+    Compared by attribute rather than text because a sanitised page is re-serialised: the same tag
+    comes back as `<meta charset="utf-8"/>` with sorted attributes, and must not be added twice.
+    """
+    low = tag.lower()
+    if low.startswith("<meta"):
+        attrs = _attrs_of(tag)
+        key = attrs.get("name") or attrs.get("property") or attrs.get("http-equiv")
+        if not key:                                       # charset-style tag: nothing to key on
+            return any(_attrs_of(other) == attrs for other in _HEAD_TAG.findall(page) if other.lower().startswith("<meta"))
+        return bool(re.search(
+            rf'<meta[^<>]+(?:name|property|http-equiv)\s*=\s*["\']?{re.escape(key)}', page, re.I))
+    if low.startswith("<title"):
+        return bool(re.search(r"<title", page, re.I))
+    if low.startswith("<script"):
+        return bool(re.search(r"<script[^<>]+application/ld\+json", page, re.I))
+    return True
+
+
+def _carry_over(page: str, previous: str) -> str:
+    """Re-apply markup an earlier audit fix inserted, which this fresh rebuild has dropped.
+
+    Every build is re-composed from copy + design, so inserted elements only survive if they are
+    carried over - the same deal the CSS override block already makes for style edits.
+    """
+    if not previous:
+        return page
+    head = "".join(t for t in (_void_open(x) for x in _HEAD_TAG.findall(previous))
+                   if not _UNSAFE_TAG.search(t) and not _owned_by_sanitizer(t) and not _already_in(page, t))
+    if head:
+        i = page.rfind("</head>")
+        page = f"{page[:i]}{head}{page[i:]}" if i != -1 else page
+    link = next((t for t in _ANCHOR_TAG.findall(previous)
+                 if "skip-link" in t and not _UNSAFE_TAG.search(t) and _attr(t, "href").startswith("#")), "")
+    return _insert_link(page, link) if link and "skip-link" not in page else page
+
+
+_VOID_SELF_CLOSE = re.compile(r"\s*/>\s*$")
+
+
+def _void_open(tag: str) -> str:
+    """`<meta ... />` -> `<meta ...>`.
+
+    html.parser treats a self-closed void tag as a container and nests whatever follows it inside it,
+    which is how a carried-over tag can end up owning the rest of the head.
+    """
+    return _VOID_SELF_CLOSE.sub(">", tag) if tag.lower().startswith("<meta") else tag
+
+
+def _owned_by_sanitizer(tag: str) -> bool:
+    """Metas the sanitizer adds or strips itself: carrying them over would only cause collisions."""
+    return tag.lower().startswith("<meta") and _attr(tag, "http-equiv").lower() in {"content-security-policy", "refresh"}
+
+
+def _add_skip_link(page: str, fix: str) -> str:
+    m = _AFTER_BODY.search(fix)
+    if not m or "skip-link" in page:
+        return page
+    link = next((t for t in _ANCHOR_TAG.findall(m.group(1))
+                 if not _UNSAFE_TAG.search(t) and _attr(t, "href").startswith("#")), "")
+    return _insert_link(page, link) if link else page
+
+
+def _insert_link(page: str, link: str) -> str:
+    """Put the skip link first in the tab order, and make sure its target really exists."""
+    target = _attr(link, "href")[1:]
+    if not re.search(rf'id\s*=\s*["\']?{re.escape(target)}\b', page):
+        main = re.search(r"<main\b([^<>]*)>", page, re.I)
+        # A link to nothing would trade an a11y warning for a broken-anchor error, so require a target.
+        if not main or re.search(r"\bid\s*=", main.group(1), re.I):
+            return page
+        page = page[:main.start()] + f'<main id="{target}"{main.group(1)}>' + page[main.end():]
+    body = re.search(r"<body\b[^<>]*>", page, re.I)
+    return page if not body else page[:body.end()] + link + page[body.end():]
+
+
+def _add_main(page: str, fix: str) -> str:
+    if not re.search(r"wrap the page content in <main", fix, re.I) or re.search(r"<main\b", page, re.I):
+        return page
+    start, end = re.search(r"<section\b", page, re.I), page.rfind("</section>")
+    if not start or end == -1:
+        return page
+    return f"{page[:start.start()]}<main id=\"lc-main\">{page[start.start():end + 10]}</main>{page[end + 10:]}"
+
+
+def _demote_extra_h1(page: str, fix: str) -> str:
+    if not re.search(r"exactly one <h1", fix, re.I):
+        return page
+    seen = []
+
+    def _swap(m):
+        seen.append(1)
+        return m.group(0) if len(seen) == 1 else m.group(0).replace("h1", "h2")
+
+    return re.sub(r"<h1\b[^<>]*>[^<>]*</h1>", _swap, page)
+
+
+def _literal_rules(fix: str) -> dict:
+    """CSS the audit wrote out literally, e.g. ":focus-visible{outline:...}". Selector is the token
+    right before the brace, so the prose that introduces it is ignored."""
+    out: dict[tuple[str, str], str] = {}
+    for selector, body in _CSS_BLOCK.findall(fix):
+        selector = selector.strip()
+        if not _SAFE_SELECTOR.match(selector):
+            continue
+        for declaration in body.split(";"):
+            prop, _, value = declaration.partition(":")
+            prop, value = prop.strip(), value.strip()
+            if prop and value and _SAFE_CSS_VALUE.match(value):
+                out[(selector, prop)] = value
+    return out
 
 
 def _read_overrides(html: str) -> dict:

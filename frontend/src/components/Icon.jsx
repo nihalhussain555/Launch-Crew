@@ -204,6 +204,20 @@ const PATHS = {
       <path d="M12 16.6h.01" />
     </>
   ),
+  audit: (
+    <>
+      <circle cx="10.5" cy="10.5" r="6.5" />
+      <path d="M15.4 15.4 20 20" />
+      <path d="m7.8 10.6 1.9 1.9 3.6-3.7" />
+    </>
+  ),
+  key: (
+    <>
+      <circle cx="8.2" cy="8.2" r="3.8" />
+      <path d="m11 11 8 8" />
+      <path d="m15.6 15.6-2 2M17.4 17.4l-2 2" />
+    </>
+  ),
 };
 
 export default function Icon({ name, size, strokeWidth, className = "" }) {

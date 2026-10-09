@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api import routes_auth
 from app.main import app
+from app.orchestrator.graph import AUDIT_ORDER
 from app.tools import browser_checks, differ
 from tests.conftest import BAD_CHECKS, GOOD_CHECKS
 
@@ -169,10 +170,13 @@ def test_workspace_requires_ownership(built):
     client, h, rid, _ = built
     r = client.post("/api/auth/register", json={"email": "nosy@example.com", "password": "supersecret1", "name": "N"})
     other = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    for path in (f"/api/runs/{rid}/files", f"/api/runs/{rid}/versions", f"/api/runs/{rid}/files.zip"):
+    for path in (f"/api/runs/{rid}/files", f"/api/runs/{rid}/versions", f"/api/runs/{rid}/files.zip",
+                 f"/api/runs/{rid}/tests", f"/api/runs/{rid}/tests/file"):
         assert client.get(path, headers=other).status_code == 404
     for path, payload in ((f"/api/runs/{rid}/chat", {"text": "change it"}),
-                          (f"/api/runs/{rid}/restore", {"version": 1})):
+                          (f"/api/runs/{rid}/restore", {"version": 1}),
+                          (f"/api/runs/{rid}/audit", {}),
+                          (f"/api/runs/{rid}/audit/repair", {})):
         assert client.post(path, headers=other, json=payload).status_code == 404
     assert client.post(f"/api/runs/{rid}/debug", headers=other).status_code == 404
     assert client.get(f"/api/runs/{rid}/files").status_code == 401
@@ -184,3 +188,69 @@ def test_actions_need_the_approval_gate(built):
     assert client.get(f"/api/runs/{rid}", headers=h).json()["status"] == "deployed"
     assert client.post(f"/api/runs/{rid}/debug", headers=h).status_code == 409
     assert client.post(f"/api/runs/{rid}/chat", headers=h, json={"text": "one more tweak"}).status_code == 409
+    assert client.post(f"/api/runs/{rid}/audit", headers=h, json={}).status_code == 409
+
+
+# --------------------------------------------------------------------------- audits + tests
+def test_audit_records_every_report_on_the_live_version(built):
+    client, h, rid, run = built
+    assert client.post(f"/api/runs/{rid}/audit", headers=h, json={}).status_code == 202
+    state = client.get(f"/api/runs/{rid}", headers=h).json()["state"]
+    assert sorted(state["audits"]) == sorted(AUDIT_ORDER)
+    assert all(r["version"] == state["html_version"] == 1 for r in state["audits"].values())
+    assert all(r["findings"] and r["score"] is not None and r["headline"] for r in state["audits"].values())
+    assert state["audits"]["tests"]["checks"] >= 1
+    assert next(c for c in state["readiness"]["components"] if c["id"] == "audits")["max"] == 20
+    assert client.get(f"/api/runs/{rid}", headers=h).json()["status"] == "awaiting_approval"
+
+
+def test_audit_can_run_a_subset_and_rejects_nonsense(built):
+    client, h, rid, _ = built
+    assert client.post(f"/api/runs/{rid}/audit", headers=h, json={"agents": ["seo"]}).status_code == 202
+    state = client.get(f"/api/runs/{rid}", headers=h).json()["state"]
+    assert list(state["audits"]) == ["seo"] and state["tests"] is None
+    assert client.get(f"/api/runs/{rid}/tests", headers=h).status_code == 404
+    assert client.post(f"/api/runs/{rid}/audit", headers=h, json={"agents": ["seo", "magic"]}).status_code == 422
+    assert client.post(f"/api/runs/{rid}/audit", headers=h, json={"agents": []}).status_code == 422
+
+
+def test_audit_repair_rebuilds_the_page_and_the_fixes_are_visible(built):
+    client, h, rid, _ = built
+    assert client.post(f"/api/runs/{rid}/audit/repair", headers=h, json={}).status_code == 409
+    client.post(f"/api/runs/{rid}/audit", headers=h, json={"agents": ["seo", "accessibility"]})
+    before = client.get(f"/api/runs/{rid}/html", headers=h).text
+    assert "name=\"description\"" not in before
+
+    assert client.post(f"/api/runs/{rid}/audit/repair", headers=h,
+                       json={"agents": ["seo", "accessibility"]}).status_code == 202
+    state = client.get(f"/api/runs/{rid}", headers=h).json()["state"]
+    served = client.get(f"/api/runs/{rid}/html", headers=h).text
+    assert state["html_version"] == 2 and served != before
+    assert 'name="description"' in served and "application/ld+json" in served
+    assert 'class="skip-link"' in served and 'id="lc-main"' in served
+    assert all(r["version"] == 2 for r in state["audits"].values())
+    assert state["audits"]["seo"]["errors"] == 0
+    assert state["chat"][-1]["text"].startswith("Audit repair:")
+
+
+def test_generated_tests_are_readable_and_downloadable(built):
+    client, h, rid, _ = built
+    client.post(f"/api/runs/{rid}/audit", headers=h, json={"agents": ["tests"]})
+    body = client.get(f"/api/runs/{rid}/tests", headers=h).json()
+    assert body["ran"] is True and body["failed"] == 0 and body["passed"] == len(body["cases"])
+    assert "file" not in body                                          # the text only comes from /tests/file
+    res = client.get(f"/api/runs/{rid}/tests/file", headers=h)
+    assert res.status_code == 200 and res.headers["content-type"].startswith("text/x-python")
+    assert "attachment" in res.headers["content-disposition"]
+    compile(res.text, "test_page.py", "exec")
+    assert "LC-RESULT" in res.text
+
+
+def test_audit_repair_stops_at_the_revision_cap(built):
+    client, h, rid, _ = built
+    client.post(f"/api/runs/{rid}/audit", headers=h, json={"agents": ["seo"]})
+    for _ in range(5):                                    # MAX_REVISIONS is 5 per run
+        assert client.post(f"/api/runs/{rid}/chat", headers=h, json={"text": "Warmer colours please"}).status_code == 202
+    assert client.get(f"/api/runs/{rid}", headers=h).json()["state"]["revisions"] == 5
+    assert client.post(f"/api/runs/{rid}/audit/repair", headers=h, json={"agents": ["seo"]}).status_code == 429
+    assert client.post(f"/api/runs/{rid}/audit", headers=h, json={"agents": ["seo"]}).status_code == 202

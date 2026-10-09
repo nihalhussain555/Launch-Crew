@@ -4,6 +4,7 @@ import { api } from "../api";
 import AgentTrace from "../components/AgentTrace";
 import ApproveDeploy from "../components/ApproveDeploy";
 import AudiencePanel from "../components/AudiencePanel";
+import AuditModal from "../components/AuditModal";
 import ChatEditModal from "../components/ChatEditModal";
 import CriticReport from "../components/CriticReport";
 import DebugModal from "../components/DebugModal";
@@ -26,7 +27,7 @@ import Tabs from "../components/Tabs";
 import WorkspaceModal from "../components/WorkspaceModal";
 import { useRunStream } from "../hooks/useRunStream";
 
-const REFRESH_ON = new Set(["agent_message", "check_results", "awaiting_approval", "workspace_updated", "deployed", "failed"]);
+const REFRESH_ON = new Set(["agent_message", "audit_report", "check_results", "awaiting_approval", "workspace_updated", "deployed", "failed"]);
 
 /** Workspace tools: every run is a set of files, a version history and a conversation. */
 const TOOLS = [
@@ -36,6 +37,7 @@ const TOOLS = [
   { id: "chat", icon: "sparkle", label: "AI edit" },
   { id: "debug", icon: "cpu", label: "Debug" },
   { id: "heal", icon: "refresh", label: "Self-heal" },
+  { id: "audits", icon: "audit", label: "Audits" },
   { id: "workspace", icon: "folder", label: "Project" },
 ];
 
@@ -171,6 +173,7 @@ export default function RunDetail() {
       <ChatEditModal open={tool === "chat"} onClose={closeTool} run={run} onChange={setRun} />
       <DebugModal open={tool === "debug"} onClose={closeTool} run={run} onChange={setRun} />
       <HealModal open={tool === "heal"} onClose={closeTool} run={run} />
+      <AuditModal open={tool === "audits"} onClose={closeTool} run={run} onChange={setRun} />
       <WorkspaceModal open={tool === "workspace"} onClose={closeTool} run={run} />
     </>
   );

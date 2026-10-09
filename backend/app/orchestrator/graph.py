@@ -7,6 +7,8 @@ import asyncio
 from collections import defaultdict
 
 from app.agents import variants
+from app.agents.audits import (AccessibilityAgent, DependencyAgent, PerformanceAgent, SeoAgent,
+                               SecurityAgent, TestAgent)
 from app.agents.copywriter import CopywriterAgent
 from app.agents.critic import CriticAgent
 from app.agents.designer import DesignerAgent
@@ -22,6 +24,11 @@ from app.orchestrator.state import GuardrailError, RunContext
 from app.tools.sanitizer import sanitize_html
 
 TARGET_AGENT = {"page": "engineer", "copy": "copywriter", "design": "designer"}
+
+# On-demand audits, keyed by the name the API and UI use. Order is the order they run in.
+AUDIT_AGENTS = {"security": SecurityAgent, "seo": SeoAgent, "accessibility": AccessibilityAgent,
+                "performance": PerformanceAgent, "dependency": DependencyAgent, "tests": TestAgent}
+AUDIT_ORDER = ("security", "seo", "accessibility", "performance", "dependency", "tests")
 
 # Conversational editing: map a plain-language request to the agent that owns the change.
 # Styling words are checked first, so "add more spacing" goes to the Designer and not the Copywriter.
@@ -194,7 +201,7 @@ class Orchestrator:
         s = self.ctx.state
         s.note = note or s.note
         by_agent: dict[str, list[str]] = defaultdict(list)
-        for f in sorted(fixes, key=lambda f: f["priority"]):
+        for f in sorted(fixes, key=lambda f: f.get("priority", 1)):
             by_agent[f["agent"]].append(f["instruction"])
         s.pending_fixes = dict(by_agent)
         try:
@@ -205,6 +212,65 @@ class Orchestrator:
             await self._run(self.engineer)
         finally:
             s.pending_fixes = {}
+
+    async def audit(self, kinds: list[str]) -> None:
+        """On-demand audits: measure the live page, record the reports, return to the gate.
+
+        No model is called, so an audit spends no tokens and cannot change the page.
+        """
+        ctx = self.ctx
+        await ctx.checkpoint("running")
+        await self._run_audits(kinds)
+        await self._assess(rerun_panel=False)
+        await ctx.emit("agent_message", agent="system", message=self._audit_summary(kinds))
+        await self._await_approval("Audits finished. Review the reports, repair what they found, or approve to deploy.")
+
+    async def repair(self, kinds: list[str]) -> None:
+        """Apply the fix instructions the current audits produced, then re-audit to prove they landed.
+
+        Reports taken against an older build are ignored: their findings describe markup that no
+        longer exists. The page is rebuilt through the same routed-fix path the critic loop uses, so
+        the sanitizer, browser checks and readiness score all re-run over the result.
+        """
+        ctx, s = self.ctx, self.ctx.state
+        fixes = [dict(f, priority=f.get("priority", 1)) for kind in kinds
+                 for f in (s.audits.get(kind) or {}).get("fixes", [])
+                 if (s.audits.get(kind) or {}).get("version") == s.html_version]
+        if not fixes:
+            await ctx.emit("agent_message", agent="system",
+                           message="Nothing to repair: run the audits again against this build first.")
+            await self._await_approval("No open audit findings to repair.")
+            return
+        s.revisions += 1
+        await ctx.emit("agent_message", agent="you",
+                       message=f"Audit repair #{s.revisions}: {len(fixes)} instruction(s) from "
+                               + ", ".join(k for k in kinds if (s.audits.get(k) or {}).get("fixes")))
+        await ctx.checkpoint("running")
+        await self._apply_fixes(fixes, note=f"Audit repair: {len(fixes)} fix(es)")
+        s.iteration = 0                                  # fresh critic budget for the repaired page
+        await self._critic_loop()
+        await self._run_audits(kinds)                    # same audits, against the new build
+        await self._assess(rerun_panel=False)
+        s.chat.append({"role": "assistant", "at": artifacts.stamp(), "version": s.html_version,
+                       "text": f"Audit repair: {len(fixes)} instruction(s) applied, page rebuilt to v{s.html_version}. "
+                               f"{self._audit_summary(kinds)}"})
+        await self._await_approval("Audits re-run after the repair. Review, then approve to deploy.")
+
+    async def _run_audits(self, kinds: list[str]) -> None:
+        unknown = [k for k in kinds if k not in AUDIT_AGENTS]
+        if unknown:
+            raise ValueError(f"Unknown audit(s): {', '.join(unknown)}")
+        for kind in (k for k in AUDIT_ORDER if k in set(kinds)):
+            await self._run(AUDIT_AGENTS[kind]())
+
+    def _audit_summary(self, kinds: list[str]) -> str:
+        s = self.ctx.state
+        bits = []
+        for kind in kinds:
+            rep = s.audits.get(kind)
+            if rep and rep.get("version") == s.html_version:
+                bits.append(f"{rep['label']}: {rep['score']}/100 ({rep['errors']} error(s), {rep['warnings']} warning(s))")
+        return "; ".join(bits) or "No current audit report for this build."
 
     async def launch(self) -> None:
         """Called only after the user approved."""

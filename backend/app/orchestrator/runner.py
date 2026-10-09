@@ -117,6 +117,24 @@ async def debug_pipeline(app_state, run_id: str) -> None:
         await _keep_last_good(app_state, run_id, ctx, exc, "Debug pass")
 
 
+async def audit_pipeline(app_state, run_id: str, kinds: list[str]) -> None:
+    """Measure the live page against the audit crew. Reads only - the page is not rebuilt (POST /audit)."""
+    ctx = await _ctx_for(app_state, run_id)
+    try:
+        await Orchestrator(ctx).audit(kinds)
+    except Exception as exc:  # noqa: BLE001
+        await _keep_last_good(app_state, run_id, ctx, exc, "Audit")
+
+
+async def repair_pipeline(app_state, run_id: str, kinds: list[str]) -> None:
+    """Apply the current audits' fix instructions, rebuild through the normal routed-fix path, re-audit."""
+    ctx = await _ctx_for(app_state, run_id)
+    try:
+        await Orchestrator(ctx).repair(kinds)
+    except Exception as exc:  # noqa: BLE001
+        await _keep_last_good(app_state, run_id, ctx, exc, "Audit repair")
+
+
 async def restore_pipeline(app_state, run_id: str, version: int) -> None:
     """Roll back to a saved version without spending tokens (POST /restore)."""
     ctx = await _ctx_for(app_state, run_id)

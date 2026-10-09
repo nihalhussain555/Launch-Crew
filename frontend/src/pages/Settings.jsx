@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import ConfirmModal from "../components/ConfirmModal";
+import EnvironmentModal from "../components/EnvironmentModal";
 import Icon from "../components/Icon";
 import ScoreRing from "../components/ScoreRing";
 import { useTheme } from "../theme";
@@ -13,9 +14,18 @@ const THEMES = [["light", "sun", "Light"], ["dark", "moon", "Dark"]];
 export default function Settings() {
   const { user, logout } = useAuth();
   const { theme, setTheme } = useTheme();
+  const loc = useLocation();
+  const nav = useNavigate();
   const [stats, setStats] = useState(null);
   const [out, setOut] = useState(false);
+  const [envOpen, setEnvOpen] = useState(false);
   useEffect(() => { api.stats().then(setStats).catch(() => {}); }, []);
+  // The command palette can deep-link straight into the environment manager.
+  useEffect(() => {
+    if (!loc.state?.openEnv) return;
+    setEnvOpen(true);
+    nav(loc.pathname, { replace: true, state: null });
+  }, [loc.state, loc.pathname, nav]);
 
   return (
     <>
@@ -68,6 +78,17 @@ export default function Settings() {
         </section>
 
         <section className="card set-card">
+          <h2>Service environment</h2>
+          <div className="set-rows">
+            <div className="set-row"><span className="set-key">Configuration</span>
+              <span className="set-val"><button className="btn ghost small" onClick={() => setEnvOpen(true)}><Icon name="key" size={15} /> Open manager</button></span></div>
+            <div className="set-row"><span className="set-key">Secrets</span><strong className="set-val">Never leave the server</strong></div>
+          </div>
+          <p className="set-note">Every variable the crew reads, where its value came from, and a template you can copy.
+            Keys are reported as length and a fingerprint only.</p>
+        </section>
+
+        <section className="card set-card">
           <h2>Help</h2>
           <div className="set-rows">
             <div className="set-row"><span className="set-key">Product tour</span>
@@ -91,6 +112,7 @@ export default function Settings() {
 
       <ConfirmModal open={out} onClose={() => setOut(false)} onConfirm={logout} danger confirmLabel="Log out"
         title="Log out?" message="You will need to sign in again to see your projects and runs." />
+      <EnvironmentModal open={envOpen} onClose={() => setEnvOpen(false)} />
     </>
   );
 }

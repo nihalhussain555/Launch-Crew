@@ -64,6 +64,14 @@ export const api = {
   chat: (id, text) => post(`/api/runs/${id}/chat`, { text }),
   debug: (id) => post(`/api/runs/${id}/debug`),
   restore: (id, version) => post(`/api/runs/${id}/restore`, { version }),
+  // crew audits: deterministic scans of the live page, plus the repair loop that applies their findings
+  audit: (id, agents) => post(`/api/runs/${id}/audit`, agents ? { agents } : {}),
+  auditRepair: (id, agents) => post(`/api/runs/${id}/audit/repair`, agents ? { agents } : {}),
+  tests: (id) => json(`/api/runs/${id}/tests`),
+  testsFile: async (id) => (await raw(`/api/runs/${id}/tests/file`)).text(),
+  // environment manager (metadata only: the server never sends a secret value)
+  configStatus: () => json("/api/config/status"),
+  envExample: () => json("/api/config/env-example"),
   // public (no login): shareable preview + feedback
   publicInfo: (token) => json(`/api/public/${token}`),
   publicHtml: async (token) => (await raw(`/api/public/${token}/html`)).text(),

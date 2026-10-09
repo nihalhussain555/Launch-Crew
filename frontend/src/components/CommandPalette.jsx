@@ -22,6 +22,7 @@ export default function CommandPalette({ open, onClose }) {
       { id: "projects", label: "Go to Projects", icon: "folder", run: () => nav("/projects") },
       { id: "templates", label: "Browse idea templates", icon: "sparkle", run: () => nav("/templates") },
       { id: "settings", label: "Open Settings", icon: "gear", run: () => nav("/settings") },
+      { id: "env", label: "Open environment manager", icon: "key", run: () => nav("/settings", { state: { openEnv: true } }) },
     ];
     const runs = recent.map((r) => ({ id: r.id, label: `Open run: ${r.idea.slice(0, 60)}`, icon: "rocket", run: () => nav(`/runs/${r.id}`) }));
     const all = [...base, ...runs];
