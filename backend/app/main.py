@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (routes_auth, routes_config, routes_projects, routes_runs, routes_share, routes_stats,
-                     routes_stream)
+                     routes_stream, routes_workspace)
 from app.config import get_settings
 from app.db.mongo import create_client, ensure_indexes
 from app.llm.client import LLMClient
@@ -38,7 +38,7 @@ app = FastAPI(title="Launch Crew API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=get_settings().origins, allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 for r in (routes_auth.router, routes_config.router, routes_projects.router, routes_runs.router,
-          routes_share.router, routes_stats.router, routes_stream.router):
+          routes_share.router, routes_stats.router, routes_stream.router, routes_workspace.router):
     app.include_router(r)
 
 

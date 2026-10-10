@@ -19,6 +19,11 @@ class EngineerAgent(BaseAgent):
         fixes = s.pending_fixes.get("engineer")
         if fixes and s.html:  # patch mode: send the current page + fixes
             user += "FIXES (apply all, keep everything else unchanged):\n" + "\n".join(f"- {f}" for f in fixes)
+            block = (s.impact or {}).get("block")
+            if block:  # measured from the workspace index before this rebuild: which names live where
+                user += ("\n" + block +
+                         "\nApply every fix in this one document. Names listed as paired or in-scope must "
+                         "change together; every other block comes back byte-for-byte.\n")
             user += f"\nCURRENT_HTML:\n{s.html}"
         user += variants.prompt_block(direction)
         messages = [self.system_message(), {"role": "user", "content": user}]

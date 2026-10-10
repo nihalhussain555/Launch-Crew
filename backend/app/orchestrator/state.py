@@ -41,6 +41,13 @@ class RunState(BaseModel):
     chat: list[dict] = Field(default_factory=list)        # [{role, text, at, target, version}]
     note: str = ""                                        # what the next snapshot should be labelled with
 
+    # File-level editing (app/services/workspace_manager.py): whole-file-set snapshots and change plans.
+    workspace_versions: list[dict] = Field(default_factory=list)  # [{w, at, note, html_version, files, changed}]
+    change_plans: list[dict] = Field(default_factory=list)        # [{id, at, request, status, changes, impact, result}]
+    impact: dict | None = None                            # the last impact report measured before editing
+    changed_files: dict | None = None                     # per-file line movement of the last applied change
+    validation: dict | None = None                        # how the last change fared after the checks re-ran
+
     iteration: int = 0
     revisions: int = 0
     panel: dict | None = None
@@ -60,6 +67,7 @@ class RunState(BaseModel):
     email: dict | None = None
     deploy_url: str | None = None
     deploy_mock: bool = False
+    deploy_warning: str | None = None                         # what a visitor gets that the user did not
 
     def persisted(self) -> dict:
         return self.model_dump(exclude={"html"})

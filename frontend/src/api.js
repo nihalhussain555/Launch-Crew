@@ -69,6 +69,17 @@ export const api = {
   auditRepair: (id, agents) => post(`/api/runs/${id}/audit/repair`, agents ? { agents } : {}),
   tests: (id) => json(`/api/runs/${id}/tests`),
   testsFile: async (id) => (await raw(`/api/runs/${id}/tests/file`)).text(),
+  // workspace intelligence: index, impact, planned file-level patches and whole-file-set snapshots
+  wsOverview: (id) => json(`/api/runs/${id}/workspace`),
+  wsIndex: (id, full) => json(`/api/runs/${id}/workspace/index${full ? "?full=true" : ""}`),
+  wsImpact: (id, text) => json(`/api/runs/${id}/workspace/impact?text=${encodeURIComponent(text)}`),
+  wsPlan: (id, body) => post(`/api/runs/${id}/workspace/plan`, body),
+  wsApply: (id, body) => post(`/api/runs/${id}/workspace/apply`, body),
+  wsVersions: (id) => json(`/api/runs/${id}/workspace/versions`),
+  wsVersion: (id, w) => json(`/api/runs/${id}/workspace/versions/${w}`),
+  wsVersionFile: async (id, w, name) => (await raw(`/api/runs/${id}/workspace/versions/${w}/files/${encodeURIComponent(name)}`)).text(),
+  wsDiff: (id, w, to) => json(`/api/runs/${id}/workspace/diff?w=${w}${to ? `&to=${to}` : ""}`),
+  wsRestore: (id, w) => post(`/api/runs/${id}/workspace/restore`, { w }),
   // environment manager (metadata only: the server never sends a secret value)
   configStatus: () => json("/api/config/status"),
   envExample: () => json("/api/config/env-example"),

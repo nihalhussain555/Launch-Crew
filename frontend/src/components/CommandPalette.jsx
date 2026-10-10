@@ -18,11 +18,19 @@ export default function CommandPalette({ open, onClose }) {
 
   const items = useMemo(() => {
     const base = [
-      { id: "dash", label: "Go to Dashboard", icon: "home", run: () => nav("/dashboard") },
+      { id: "dash", label: "Go to AI Agent Studio", icon: "cpu", run: () => nav("/dashboard") },
       { id: "projects", label: "Go to Projects", icon: "folder", run: () => nav("/projects") },
+      { id: "workflows", label: "Open Agent Workflows", icon: "workflow", run: () => nav("/workflows") },
+      { id: "chat", label: "Open AI Chat", icon: "chat", run: () => nav("/chat") },
+      { id: "workspace", label: "Open Code Workspace", icon: "code", run: () => nav("/workspace") },
+      { id: "versions", label: "Open Version History", icon: "layers", run: () => nav("/versions") },
+      { id: "quality", label: "Open Security & Quality", icon: "shield", run: () => nav("/quality") },
+      { id: "deployments", label: "Open Deployments", icon: "rocket", run: () => nav("/deployments") },
+      { id: "integrations", label: "Open Integrations", icon: "key", run: () => nav("/integrations") },
+      { id: "analytics", label: "Open Analytics & Usage", icon: "chart", run: () => nav("/analytics") },
       { id: "templates", label: "Browse idea templates", icon: "sparkle", run: () => nav("/templates") },
       { id: "settings", label: "Open Settings", icon: "gear", run: () => nav("/settings") },
-      { id: "env", label: "Open environment manager", icon: "key", run: () => nav("/settings", { state: { openEnv: true } }) },
+      { id: "profile", label: "Open your profile", icon: "user", run: () => nav("/profile") },
     ];
     const runs = recent.map((r) => ({ id: r.id, label: `Open run: ${r.idea.slice(0, 60)}`, icon: "rocket", run: () => nav(`/runs/${r.id}`) }));
     const all = [...base, ...runs];

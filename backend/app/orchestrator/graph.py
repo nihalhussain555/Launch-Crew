@@ -21,6 +21,7 @@ from app.agents.base import looks_like_html
 from app.orchestrator import artifacts
 from app.orchestrator.readiness import compute_readiness
 from app.orchestrator.state import GuardrailError, RunContext
+from app.services import change_impact, workspace_manager
 from app.tools.sanitizer import sanitize_html
 
 TARGET_AGENT = {"page": "engineer", "copy": "copywriter", "design": "designer"}
@@ -93,6 +94,19 @@ class Orchestrator:
                 await ctx.emit("agent_message", agent="system", message=f"Audience panel skipped: {str(exc)[:160]}")
         s.readiness = compute_readiness(s)
         await artifacts.annotate(ctx)          # version history shows the score each build ended with
+        self._close_validation()
+
+    def _close_validation(self) -> None:
+        """Say how the checks scored the page the last change produced, next to that change."""
+        s = self.ctx.state
+        v = s.validation
+        if not v or v.get("version") != s.html_version:
+            return                             # a later rebuild owns the validation now
+        errors = s.check_summary.get("errors", 0)
+        v.update({"status": "clean" if not errors else "issues",
+                  "check_errors": errors, "check_warnings": s.check_summary.get("warnings", 0),
+                  "readiness": (s.readiness or {}).get("total"),
+                  "impact_errors": (s.impact or {}).get("counts", {}).get("errors", 0)})
 
     async def _await_approval(self, message: str) -> None:
         ctx, s = self.ctx, self.ctx.state
@@ -196,10 +210,120 @@ class Orchestrator:
                        "text": f"Restored v{version} as v{s.html_version}. {(s.readiness or {}).get('total', '-')}/100 readiness."})
         await self._await_approval(f"v{version} restored as v{s.html_version}.")
 
+    # ------------------------------------------------------------- file-level edits (workspace API)
+
+    async def apply_workspace_changes(self, changes: list[dict], request: str = "") -> dict:
+        """Patch named files, then judge the result exactly like a generated build.
+
+        No model is called, so this spends no tokens. The workspace is indexed and the impact measured
+        first, every file is snapshotted before anything is overwritten, and the patched page goes
+        through the sanitizer, the Chromium checks and the readiness score afterwards - a hand-written
+        edit gets no free pass.
+        """
+        ctx, s = self.ctx, self.ctx.state
+        await ctx.checkpoint("running")
+        texts = await workspace_manager.load_texts(ctx)
+        texts.setdefault("index.html", s.html)
+        index = workspace_manager.index_texts(texts, version=s.html_version)
+        ask = (request or " ".join(f"{c.get('file', '')} {c.get('op', '')} {c.get('note', '')}"
+                                   for c in changes)).strip()[:500]
+        report = change_impact.analyze(index, ask, version=s.html_version)
+        s.impact = report
+
+        validated = workspace_manager.validate_changes(changes)
+        before, _, page = await workspace_manager.prepare_changes(ctx, validated)
+        plan = workspace_manager.record_plan(ctx, request=ask, changes=validated, report=report,
+                                             status="applying")
+        files_touched = sorted({c["file"] for c in validated} | {"index.html"})
+        try:
+            snapshot = await workspace_manager.capture(ctx, note=f"Before change {plan['id']} (v{s.html_version})",
+                                                       changed=files_touched)
+            result = await workspace_manager.commit(ctx, before=before, page=page,
+                                                    note=f"File-level change {plan['id']}: {ask[:120]}")
+        except Exception as exc:  # noqa: BLE001 - the plan says what was attempted, then the failure stands
+            plan["status"] = "rejected"
+            plan["result"] = {"error": (getattr(exc, "message", None) or str(exc))[:300]}
+            raise
+
+        s.revisions += 1
+        s.changed_files = {k: result[k] for k in ("files", "changed", "lines_added", "lines_removed")}
+        s.validation = {"at": artifacts.stamp(), "version": s.html_version, "status": "pending",
+                        "kind": "file patch", "workspace_version": snapshot["w"],
+                        "measured_from": report["version"], "plan": plan["id"],
+                        "changed": result["changed"], "lines_added": result["lines_added"],
+                        "lines_removed": result["lines_removed"],
+                        "sanitizer_removed": result["sanitizer_removed"]}
+        plan["status"] = "applied"
+        plan["result"] = {"version": s.html_version, "workspace_version": snapshot["w"],
+                          "changed": result["changed"], "lines_added": result["lines_added"],
+                          "lines_removed": result["lines_removed"],
+                          "sanitizer_removed": result["sanitizer_removed"]}
+        await ctx.emit("workspace_updated", version=s.html_version,
+                       files=[{"name": f["name"], "bytes": f["bytes"]} for f in s.files])
+        s.chat.append({"role": "user", "text": ask, "at": artifacts.stamp(), "target": "files"})
+        await ctx.emit("agent_message", agent="you",
+                       message=f"Workspace change #{s.revisions}: {ask}")
+
+        s.iteration = 0
+        await self._run(self.critic)                   # re-measure the patched page, same rule as restore()
+        await artifacts.annotate(ctx)
+        await self._assess(rerun_panel=False)
+        plan["result"].update({"check_errors": s.check_summary.get("errors", 0),
+                               "check_warnings": s.check_summary.get("warnings", 0),
+                               "readiness": (s.readiness or {}).get("total")})
+        s.chat.append({"role": "assistant", "at": artifacts.stamp(), "version": s.html_version,
+                       "text": self._reply()})
+        await self._await_approval("File-level change applied. Review the diff, then approve to deploy.")
+        return plan
+
+    async def restore_workspace_snapshot(self, w: int) -> None:
+        """Roll the whole workspace - page plus derived files - back to a captured snapshot."""
+        ctx, s = self.ctx, self.ctx.state
+        await ctx.checkpoint("running")
+        page = await workspace_manager.snapshot_page(ctx, w)
+        before = await workspace_manager.load_texts(ctx)
+        before.setdefault("index.html", s.html)
+        clean, violations = sanitize_html(page)        # the same guardrail a fresh build goes through
+        if not looks_like_html(clean):
+            raise GuardrailError(f"Workspace snapshot w{w} is no longer a complete page; nothing was restored.")
+
+        snapshot = await workspace_manager.capture(ctx, note=f"Before restoring w{w}",
+                                                   changed=sorted(before))
+        s.html, s.sanitizer_violations = clean, violations
+        s.html_version += 1
+        s.note = f"Restored workspace w{w}"
+        files = await artifacts.publish(ctx)
+        s.html_key = next(f["key"] for f in files if f["name"] == "index.html")
+        after = await workspace_manager.load_texts(ctx)
+        after["index.html"] = clean
+        s.changed_files = workspace_manager.stats(before, after)
+        s.validation = {"at": artifacts.stamp(), "version": s.html_version, "status": "pending",
+                        "kind": "workspace restore", "workspace_version": snapshot["w"],
+                        "restored_from": w, "changed": s.changed_files["changed"],
+                        "lines_added": s.changed_files["lines_added"],
+                        "lines_removed": s.changed_files["lines_removed"],
+                        "sanitizer_removed": len(violations)}
+        await ctx.emit("workspace_updated", version=s.html_version,
+                       files=[{"name": f["name"], "bytes": f["bytes"]} for f in files])
+        s.iteration = 0
+        await self._run(self.critic)
+        await artifacts.annotate(ctx)
+        await self._assess(rerun_panel=False)
+        s.chat.append({"role": "assistant", "at": artifacts.stamp(), "version": s.html_version,
+                       "text": f"Restored workspace snapshot w{w} as v{s.html_version}. "
+                               f"{self._reply()}"})
+        await self._await_approval(f"Workspace w{w} restored as v{s.html_version}.")
+
     async def _apply_fixes(self, fixes: list[dict], note: str = "") -> None:
-        """Route fixes to the owning agent, then always rebuild the page."""
+        """Route fixes to the owning agent, then always rebuild the page.
+
+        The change is measured against the workspace index first (no model, no cost) so the Engineer
+        sees which files a name actually lives in - and which are rebuilt from the page on every
+        publish - before it writes anything. What the rebuild really moved is measured again after it.
+        """
         s = self.ctx.state
         s.note = note or s.note
+        before = await self._impact_for(" ".join(f["instruction"] for f in fixes))
         by_agent: dict[str, list[str]] = defaultdict(list)
         for f in sorted(fixes, key=lambda f: f.get("priority", 1)):
             by_agent[f["agent"]].append(f["instruction"])
@@ -212,6 +336,50 @@ class Orchestrator:
             await self._run(self.engineer)
         finally:
             s.pending_fixes = {}
+        await self._measure_edit(before)
+
+    async def _impact_for(self, request: str) -> dict[str, str]:
+        """Impact report for a change about to be made, plus the file texts to diff it against.
+
+        Returns {} when there is nothing to index: the analysis is an aid to the edit, never a gate
+        on it, so an unreadable workspace must not stop the crew from rebuilding.
+        """
+        ctx, s = self.ctx, self.ctx.state
+        if not s.html:
+            s.impact = None
+            return {}
+        try:
+            texts = await workspace_manager.load_texts(ctx)
+            texts.setdefault("index.html", s.html)
+            index = workspace_manager.index_texts(texts, version=s.html_version)
+        except Exception as exc:  # noqa: BLE001 - a lost blob costs a report, not a run
+            s.impact = change_impact.empty(request, version=s.html_version,
+                                           reason=f"The workspace could not be indexed ({str(exc)[:120]}).")
+            return {}
+        s.impact = change_impact.analyze(index, request, version=s.html_version)
+        return texts
+
+    async def _measure_edit(self, before: dict[str, str]) -> None:
+        """Compare the workspace the rebuild published against the one it replaced."""
+        ctx, s = self.ctx, self.ctx.state
+        if not before:
+            return
+        try:
+            after = await workspace_manager.load_texts(ctx)
+        except Exception:  # noqa: BLE001 - the page is already rebuilt; the stats are a bonus
+            return
+        after.setdefault("index.html", s.html)
+        s.changed_files = workspace_manager.stats(before, after)
+        s.validation = {"at": artifacts.stamp(), "version": s.html_version, "status": "pending",
+                        "kind": "crew rebuild", "measured_from": (s.impact or {}).get("version"),
+                        "changed": s.changed_files["changed"],
+                        "lines_added": s.changed_files["lines_added"],
+                        "lines_removed": s.changed_files["lines_removed"],
+                        "sanitizer_removed": len(s.sanitizer_violations)}
+        await ctx.emit("agent_message", agent="system",
+                       message=f"Impact: {change_impact.headline(s.impact or {})} "
+                               f"Rebuild moved {s.changed_files['lines_added']} line(s) over "
+                               f"{len(s.changed_files['changed'])} file(s).")
 
     async def audit(self, kinds: list[str]) -> None:
         """On-demand audits: measure the live page, record the reports, return to the gate.

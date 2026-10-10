@@ -6,7 +6,7 @@ const KEY = "lc_tour_done";
 /* Each step lists the elements it can point at, in priority order — the first one actually on
    screen wins, so the rail step falls back to the mobile menu button on narrow viewports. */
 const STEPS = [
-  { targets: ["[data-tour=nav]", "[data-tour=navToggle]"], title: "Your workspace lives here", body: "Dashboard, Projects, Templates and Settings are always one click away. The rail highlights where you are." },
+  { targets: ["[data-tour=nav]", "[data-tour=navToggle]"], title: "Your workspace lives here", body: "Three groups, always one click away: AI development, Build & ship, and Manage. The rail highlights where you are." },
   { targets: ["[data-tour=idea]"], title: "Start with one sentence", body: "Describe any idea and the crew — researcher, strategist, copywriter, designer, engineer, critic, audience panel — gets to work." },
   { targets: ["[data-tour=stats]"], title: "Track what matters", body: "Projects, runs, deployed pages, readiness and token spend, straight from your account." },
   { targets: ["[data-tour=search]"], title: "Everything on Ctrl / ⌘ K", body: "The command palette jumps to any page and lists your recent runs. Esc closes any dialog." },

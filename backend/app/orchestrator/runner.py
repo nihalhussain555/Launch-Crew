@@ -73,7 +73,7 @@ async def launch_pipeline(app_state, run_id: str) -> None:
     except Exception as exc:  # noqa: BLE001
         await _fail(db, ctx, exc)
 
-async def _ctx_for(app_state, run_id: str) -> RunContext:
+async def ctx_for(app_state, run_id: str) -> RunContext:
     """Rebuild the run's context (state + page) from the database, as every follow-up phase needs it."""
     db = app_state.db
     doc = await db.runs.find_one({"_id": ObjectId(run_id)})
@@ -101,7 +101,7 @@ async def _keep_last_good(app_state, run_id: str, ctx: RunContext, exc: Exceptio
 
 async def revise_pipeline(app_state, run_id: str, instruction: str, target: str) -> None:
     """Apply the user's feedback. Runs only after POST /revise flipped the run from 'awaiting_approval' to 'running'."""
-    ctx = await _ctx_for(app_state, run_id)
+    ctx = await ctx_for(app_state, run_id)
     try:
         await Orchestrator(ctx).revise(instruction, target)
     except Exception as exc:  # noqa: BLE001
@@ -110,7 +110,7 @@ async def revise_pipeline(app_state, run_id: str, instruction: str, target: str)
 
 async def debug_pipeline(app_state, run_id: str) -> None:
     """Autonomous debugging: re-check the live page and repair what fails (POST /debug)."""
-    ctx = await _ctx_for(app_state, run_id)
+    ctx = await ctx_for(app_state, run_id)
     try:
         await Orchestrator(ctx).debug()
     except Exception as exc:  # noqa: BLE001
@@ -119,7 +119,7 @@ async def debug_pipeline(app_state, run_id: str) -> None:
 
 async def audit_pipeline(app_state, run_id: str, kinds: list[str]) -> None:
     """Measure the live page against the audit crew. Reads only - the page is not rebuilt (POST /audit)."""
-    ctx = await _ctx_for(app_state, run_id)
+    ctx = await ctx_for(app_state, run_id)
     try:
         await Orchestrator(ctx).audit(kinds)
     except Exception as exc:  # noqa: BLE001
@@ -128,7 +128,7 @@ async def audit_pipeline(app_state, run_id: str, kinds: list[str]) -> None:
 
 async def repair_pipeline(app_state, run_id: str, kinds: list[str]) -> None:
     """Apply the current audits' fix instructions, rebuild through the normal routed-fix path, re-audit."""
-    ctx = await _ctx_for(app_state, run_id)
+    ctx = await ctx_for(app_state, run_id)
     try:
         await Orchestrator(ctx).repair(kinds)
     except Exception as exc:  # noqa: BLE001
@@ -137,11 +137,29 @@ async def repair_pipeline(app_state, run_id: str, kinds: list[str]) -> None:
 
 async def restore_pipeline(app_state, run_id: str, version: int) -> None:
     """Roll back to a saved version without spending tokens (POST /restore)."""
-    ctx = await _ctx_for(app_state, run_id)
+    ctx = await ctx_for(app_state, run_id)
     try:
         await Orchestrator(ctx).restore(version)
     except Exception as exc:  # noqa: BLE001
         await _keep_last_good(app_state, run_id, ctx, exc, "Restore")
+
+
+async def workspace_apply_pipeline(app_state, run_id: str, changes: list[dict], request: str) -> None:
+    """File-level patch: snapshot, apply, publish, re-check (POST /workspace/apply)."""
+    ctx = await ctx_for(app_state, run_id)
+    try:
+        await Orchestrator(ctx).apply_workspace_changes(changes, request)
+    except Exception as exc:  # noqa: BLE001
+        await _keep_last_good(app_state, run_id, ctx, exc, "Workspace change")
+
+
+async def workspace_restore_pipeline(app_state, run_id: str, w: int) -> None:
+    """Roll the whole file set back to a captured snapshot (POST /workspace/restore)."""
+    ctx = await ctx_for(app_state, run_id)
+    try:
+        await Orchestrator(ctx).restore_workspace_snapshot(w)
+    except Exception as exc:  # noqa: BLE001
+        await _keep_last_good(app_state, run_id, ctx, exc, "Workspace restore")
 
 
 async def claim_for_revision(db, run_id: str, user_id: str) -> bool:

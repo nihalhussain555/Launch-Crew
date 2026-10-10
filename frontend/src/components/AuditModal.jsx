@@ -1,24 +1,10 @@
 import { useState } from "react";
 import { api } from "../api";
+import { AUDITS } from "../constants";
 import Icon from "./Icon";
 import Modal from "./Modal";
 import ScoreRing from "./ScoreRing";
 import EmptyState from "./EmptyState";
-
-const AUDITS = [
-  { kind: "security", icon: "lock", label: "Security",
-    blurb: "Re-verifies the safety claims on the shipped file: locked-down CSP, zero off-page requests, no network or storage APIs in page script, forms that cannot exfiltrate, and no credential-shaped text in any workspace file." },
-  { kind: "seo", icon: "globe", label: "SEO",
-    blurb: "Reads the document the way a crawler does: title and description length, a single H1, heading order, viewport, social cards, structured data and keyword coverage." },
-  { kind: "accessibility", icon: "eye", label: "Accessibility",
-    blurb: "Structural WCAG checks, plus the Critic’s real Chromium measurements for contrast, tap targets and readable text on a phone - never a second estimate of the same property." },
-  { kind: "performance", icon: "chart", label: "Performance",
-    blurb: "Counts what a phone has to carry: page and workspace weight, request count, DOM size and depth, repaint-heavy animation, image layout shift and measured 375px overflow." },
-  { kind: "dependency", icon: "workflow", label: "Dependencies",
-    blurb: "Inspects the deliverable and this service’s own manifests: pinned versions, imports nobody declared, drift between manifest and installed packages, unused dependencies. Advisory scanning is left to pip-audit and npm audit, and says so." },
-  { kind: "tests", icon: "check", label: "Regression tests",
-    blurb: "Writes a standard-library Python suite from the page that is live, runs it in a throwaway directory, and reports every case that no longer holds." },
-];
 
 const TONE = { pass: "ok", warn: "warn", fail: "err", info: "" };
 const FINDING_ICON = { pass: "check", warn: "alert", fail: "close", info: "help" };

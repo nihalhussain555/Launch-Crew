@@ -53,6 +53,30 @@ class LLMOutputError(LLMError):
     """The model produced unusable output (e.g. Groq json_validate_failed)."""
 
 
+class LLMToolRequestError(LLMOutputError):
+    """The model tried to call a tool the request never registered.
+
+    Groq refuses it with HTTP 400 ("Tool choice is none, but model called a tool") because a
+    tool-less request has nothing to execute the call. Retrying the same request cannot help; the
+    caller has to drop the tool instructions from it.
+    """
+
+
+def classify_bad_request(message: str) -> type[LLMError]:
+    """Split Groq's HTTP 400s into the recovery each one needs.
+
+    400 is not one failure: `json_validate_failed` means the model answered in the wrong shape and
+    a corrective retry can work, while a tool-call refusal means the prompt invited a tool that the
+    request does not carry.
+    """
+    low = message.lower()
+    if "tool_use_failed" in low or "called a tool" in low or "tool choice is none" in low:
+        return LLMToolRequestError
+    if "json_validate_failed" in low or "invalid_json" in low:
+        return LLMOutputError
+    return LLMError
+
+
 class RateLimitedError(LLMError):
     def __init__(self, retry_after: float | None = None, message: str = "rate limited (429)"):
         super().__init__(message)
@@ -198,6 +222,8 @@ class GroqProvider:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+        # No tools -> send no tool_choice at all. Declaring tool_choice="none" does not stop a
+        # tool-trained model from answering with a call, it only guarantees the 400 afterwards.
 
         waits: list[float] = []
         for slot in self._order():
@@ -209,9 +235,9 @@ class GroqProvider:
             except (g.APIConnectionError, g.APITimeoutError) as e:
                 raise TransientLLMError(f"connection error: {e}") from e
             except g.BadRequestError as e:
-                if "json_validate_failed" in str(e) or "tool_use_failed" in str(e):
-                    raise LLMOutputError(f"model produced invalid output: {e}") from e
-                raise LLMError(f"bad request: {e}") from e
+                kind = classify_bad_request(str(e))
+                raise kind(f"model produced invalid output: {e}" if kind is LLMOutputError
+                           else f"the model called a tool this request does not have: {e}") from e
             except g.APIStatusError as e:
                 if e.status_code >= 500:
                     raise TransientLLMError(f"groq {e.status_code}", _parse_retry_after(e)) from e

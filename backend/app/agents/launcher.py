@@ -17,6 +17,7 @@ class LauncherAgent(BaseAgent):
         name = s.content.product_name
         result = await deploy_html(s.html, name, ctx.settings)
         s.deploy_url, s.deploy_mock = result.url, result.mock
+        s.deploy_warning = result.warning
         await ctx.emit("tool_call", agent=self.name, tool="netlify_deploy", args={"site": name},
                        result_count=1, url=result.url, mock=result.mock)
 
@@ -25,4 +26,7 @@ class LauncherAgent(BaseAgent):
         kit = await self.call_json(ctx, f"IDEA: {s.idea}\nLAUNCH_JSON: {json.dumps(slim)}", LaunchKit)
         s.social_posts = [p.model_dump() for p in kit.social_posts]
         s.email = kit.email.model_dump()
-        return f"Deployed to {result.url}{' (simulated)' if result.mock else ''}; drafted 3 posts + 1 email."
+        deploy = f"Deployed to {result.url}{' (simulated)' if result.mock else ''}"
+        if result.warning:
+            deploy += f", but {result.warning}"
+        return f"{deploy}; drafted 3 posts + 1 email."

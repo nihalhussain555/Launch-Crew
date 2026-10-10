@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import { api } from "../api";
 import { useAuth } from "../auth";
 import { useTheme } from "../theme";
 import CommandPalette from "./CommandPalette";
@@ -9,29 +8,37 @@ import Icon from "./Icon";
 import LaunchCrewLogo from "./LaunchCrewLogo";
 import ProfileDropdown from "./ProfileDropdown";
 import ProductTour from "./ProductTour";
-import { compact } from "../utils";
 
-const NAV = [
-  { to: "/dashboard", label: "Dashboard", icon: "home" },
-  { to: "/projects", label: "Projects", icon: "folder" },
-  { to: "/templates", label: "Templates", icon: "sparkle" },
-  { to: "/settings", label: "Settings", icon: "gear" },
+/** Every entry here is a real route in App.jsx, backed by a live endpoint. */
+const NAV_GROUPS = [
+  { label: "AI development", items: [
+    { to: "/dashboard", label: "AI Agent Studio", icon: "cpu" },
+    { to: "/projects", label: "Projects", icon: "folder" },
+    { to: "/workflows", label: "Agent Workflows", icon: "workflow" },
+    { to: "/chat", label: "AI Chat", icon: "chat" },
+    { to: "/templates", label: "Templates", icon: "sparkle" },
+  ] },
+  { label: "Build & ship", items: [
+    { to: "/workspace", label: "Code Workspace", icon: "code" },
+    { to: "/versions", label: "Version History", icon: "layers" },
+    { to: "/quality", label: "Security & Quality", icon: "shield" },
+    { to: "/deployments", label: "Deployments", icon: "rocket" },
+  ] },
+  { label: "Manage", items: [
+    { to: "/integrations", label: "Integrations", icon: "key" },
+    { to: "/analytics", label: "Analytics & Usage", icon: "chart" },
+    { to: "/settings", label: "Settings", icon: "gear" },
+    { to: "/profile", label: "Profile", icon: "user" },
+  ] },
 ];
 const THEME_ICON = { light: "sun", dark: "moon" };
-const STATUS_LABEL = {
-  queued: "Queued", running: "Running", awaiting_approval: "Needs approval",
-  deploying: "Deploying", deployed: "Deployed", failed: "Failed",
-};
-const STATUS_TONE = { deployed: "ok", failed: "err", awaiting_approval: "warn" };
-const STATUS_DOT = { queued: "live", running: "live", deploying: "live", deployed: "on", failed: "err", awaiting_approval: "warn" };
 
 export default function Layout() {
-  const { user, logout } = useAuth();
+  const { logout } = useAuth();
   const { theme, cycle } = useTheme();
   const [navOpen, setNavOpen] = useState(false);
   const [palette, setPalette] = useState(false);
   const [out, setOut] = useState(false);
-  const [stats, setStats] = useState(null);
   const loc = useLocation();
 
   useEffect(() => setNavOpen(false), [loc.pathname]);
@@ -43,16 +50,6 @@ export default function Layout() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Sidebar panels read the same aggregate the dashboard uses; refreshed on navigation.
-  useEffect(() => {
-    let alive = true;
-    api.stats().then((s) => { if (alive) setStats(s); }).catch(() => { if (alive) setStats(null); });
-    return () => { alive = false; };
-  }, [loc.pathname]);
-
-  const runs = (stats?.recent_runs || []).slice(0, 4);
-  const pending = runs.filter((r) => r.status === "awaiting_approval").length;
-
   return (
     <div className="app">
       <a className="skip" href="#main">Skip to content</a>
@@ -62,50 +59,20 @@ export default function Layout() {
           <span className="brand-tag">Build · Automate · Launch</span>
         </div>
 
-        <div className="side-scroll">
-          <p className="side-label">Workspace</p>
-          <nav className="side-nav" aria-label="Main" data-tour="nav">
-            {NAV.map((n) => (
-              <NavLink key={n.to} to={n.to} className={({ isActive }) => `side-link ${isActive ? "active" : ""}`}>
-                <Icon name={n.icon} className="side-ico" /> {n.label}
-              </NavLink>
-            ))}
-          </nav>
-
-          <p className="side-label">Latest runs</p>
-          <div className="side-runs">
-            {!stats && [0, 1, 2].map((i) => <div key={i} className="skeleton side-run-skel" />)}
-            {stats && runs.length === 0 && <p className="side-empty">No runs yet. Launch an idea from the dashboard and it will show up here.</p>}
-            {runs.map((r) => (
-              <Link key={r.id} to={`/runs/${r.id}`} className="side-run" title={r.idea}>
-                <span className={`pill ${STATUS_TONE[r.status] || ""}`}>
-                  <span className={`dot ${STATUS_DOT[r.status] || ""}`} aria-hidden="true" /> {STATUS_LABEL[r.status] || r.status}
-                </span>
-                <span className="side-run-idea">{r.idea}</span>
-                {typeof r.score === "number" && <span className="side-run-score">{r.score}</span>}
-              </Link>
-            ))}
-          </div>
+        <div className="side-scroll" data-tour="nav">
+          {NAV_GROUPS.map((g) => (
+            <nav key={g.label} className="side-nav" aria-label={g.label}>
+              <p className="side-label">{g.label}</p>
+              {g.items.map((n) => (
+                <NavLink key={n.to} to={n.to} className={({ isActive }) => `side-link ${isActive ? "active" : ""}`}>
+                  <Icon name={n.icon} className="side-ico" /> {n.label}
+                </NavLink>
+              ))}
+            </nav>
+          ))}
         </div>
 
         <div className="side-foot">
-          <p className="side-label">Workspace usage</p>
-          <dl className="side-stats">
-            <div><dt>Projects</dt><dd>{stats ? stats.projects : "–"}</dd></div>
-            <div><dt>Runs</dt><dd>{stats ? stats.runs : "–"}</dd></div>
-            <div><dt>Deployed</dt><dd>{stats ? stats.deployed : "–"}</dd></div>
-            <div><dt>Tokens</dt><dd>{stats ? compact(stats.tokens) : "–"}</dd></div>
-          </dl>
-          <div className="side-help">
-            <button className="btn ghost block small" onClick={() => window.dispatchEvent(new Event("lc-tour-restart"))}>
-              <Icon name="help" size={15} /> Restart product tour
-            </button>
-            {pending > 0 && (
-              <Link to={`/runs/${runs.find((r) => r.status === "awaiting_approval").id}`} className="side-pending">
-                <Icon name="alert" size={15} /> {pending} run{pending > 1 ? "s" : ""} waiting on you
-              </Link>
-            )}
-          </div>
           <button className="side-logout" onClick={() => setOut(true)}><Icon name="logout" size={16} /> Log out</button>
         </div>
       </aside>

@@ -1,6 +1,7 @@
 """Application settings loaded from environment variables (and .env)."""
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_JWT_SECRET = "change-me-to-a-long-random-string"
@@ -55,6 +56,15 @@ class Settings(BaseSettings):
     # Artifact storage (HTML + screenshots): "mongo" (default, survives redeploys) or "local" (STORAGE_DIR).
     storage_backend: str = "mongo"
     storage_dir: str = "./data/artifacts"
+
+    @field_validator("mongo_uri", "mongo_db", "allowed_origin", "storage_backend", "storage_dir", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value, info):
+        """A key left empty in .env means "not set", not "the empty string": an empty MONGO_URI
+        reaches motor as a host list of one blank entry and wedges startup before the first request."""
+        if isinstance(value, str) and not value.strip():
+            return cls.model_fields[info.field_name].default
+        return value
 
     @property
     def origins(self) -> list[str]:

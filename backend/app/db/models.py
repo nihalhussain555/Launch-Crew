@@ -57,6 +57,66 @@ class RunOut(BaseModel):
     updated_at: datetime | None = None
 
 
+# ----------------------------------------------------- workspace records (app/services/workspace_manager.py)
+class WorkspaceFileRecord(BaseModel):
+    """One file inside a workspace snapshot. Storage keys stay server-side."""
+    name: str
+    bytes: int = 0
+    hash: str = ""
+
+
+class WorkspaceVersionRecord(BaseModel):
+    """The whole file set as it stood before a change - what a workspace restore puts back."""
+    w: int
+    at: str = ""
+    note: str = ""
+    html_version: int = 0
+    files: list[WorkspaceFileRecord] = []
+    changed: list[str] = []
+
+
+class ChangePlanStep(BaseModel):
+    """One named edit: which file, which operation, what it looks for."""
+    file: str
+    op: str = "replace"
+    find: str = ""
+    note: str = ""
+
+
+class ChangePlanSummary(BaseModel):
+    changes: list[ChangePlanStep] = []
+    files: list[str] = []
+    scope: str = "unknown"
+    impact_version: int | None = None
+    risk_errors: int = 0
+    risk_warnings: int = 0
+
+
+class ChangePlanRecord(BaseModel):
+    """A proposed or applied file-level change, kept beside the impact it was measured against."""
+    id: str
+    at: str = ""
+    request: str = ""
+    status: str = "proposed"
+    version: int = 0
+    summary: ChangePlanSummary = ChangePlanSummary()
+    impact: dict[str, Any] = {}
+    result: dict[str, Any] = {}
+
+
+def workspace_version_out(entry: dict) -> WorkspaceVersionRecord:
+    """A snapshot record without its storage keys."""
+    files = [WorkspaceFileRecord.model_validate({k: f.get(k, "") for k in ("name", "bytes", "hash")})
+             for f in entry.get("files") or []]
+    return WorkspaceVersionRecord(w=entry.get("w", 0), at=entry.get("at", ""), note=entry.get("note", ""),
+                                  html_version=entry.get("html_version", 0), files=files,
+                                  changed=entry.get("changed") or [])
+
+
+def change_plan_out(entry: dict) -> ChangePlanRecord:
+    return ChangePlanRecord.model_validate(entry)
+
+
 def _utc(dt):
     """PyMongo returns naive UTC datetimes; tag them so JSON carries a timezone."""
     if dt is not None and dt.tzinfo is None:

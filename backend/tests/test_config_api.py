@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from app.api import routes_auth, routes_config
 from app.config import DEFAULT_JWT_SECRET, Settings
+from app.db.mongo import create_client
 from app.main import app
 from app.tools import secret_scan
 
@@ -135,3 +136,14 @@ def test_non_secret_settings_show_their_real_value_because_they_are_not_secrets(
     assert entries["mock_llm"]["value"] is False
     assert entries["max_revisions"]["value"] == s.max_revisions
     assert entries["mongo_db"]["source"] in ("environment", ".env file", "default")
+
+
+def test_a_key_left_blank_in_the_env_file_falls_back_to_its_default():
+    """An empty MONGO_URI reached motor as a host list containing one blank entry, so the process
+    died in lifespan before it served a request. A blank line means "not set here", not "empty"."""
+    s = Settings(_env_file=None, mongo_uri="   ", mongo_db="", allowed_origin="", storage_backend="",
+                 storage_dir="")
+    assert s.mongo_uri == "mongodb://localhost:27017" and s.mongo_db == "launchcrew"
+    assert s.allowed_origins == ["http://localhost:5173"]
+    assert s.storage_backend == "mongo" and s.storage_dir == "./data/artifacts"
+    assert create_client(s).address == ("localhost", 27017)
