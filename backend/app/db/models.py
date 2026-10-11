@@ -66,13 +66,30 @@ class WorkspaceFileRecord(BaseModel):
 
 
 class WorkspaceVersionRecord(BaseModel):
-    """The whole file set as it stood before a change - what a workspace restore puts back."""
+    """The whole file set as it stood before a change - what a workspace restore, undo or redo puts back."""
     w: int
     at: str = ""
     note: str = ""
+    label: str = ""                                   # a name the user gave it, if any
+    cause: dict[str, Any] = {}                        # {kind, agent, plan, run_id, version} of the change it precedes
     html_version: int = 0
     files: list[WorkspaceFileRecord] = []
     changed: list[str] = []
+
+
+class CheckpointIn(BaseModel):
+    """A named snapshot asked for on its own, before anything is about to change."""
+    label: str = Field(default="", max_length=80)
+    note: str = Field(default="", max_length=200)
+
+
+class LabelIn(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+
+
+class StepIn(BaseModel):
+    """Undo/redo carries the version the view was read at, so a step cannot follow a stale timeline."""
+    base_version: int | None = None
 
 
 class ChangePlanStep(BaseModel):
@@ -109,6 +126,7 @@ def workspace_version_out(entry: dict) -> WorkspaceVersionRecord:
     files = [WorkspaceFileRecord.model_validate({k: f.get(k, "") for k in ("name", "bytes", "hash")})
              for f in entry.get("files") or []]
     return WorkspaceVersionRecord(w=entry.get("w", 0), at=entry.get("at", ""), note=entry.get("note", ""),
+                                  label=entry.get("label", ""), cause=entry.get("cause") or {},
                                   html_version=entry.get("html_version", 0), files=files,
                                   changed=entry.get("changed") or [])
 

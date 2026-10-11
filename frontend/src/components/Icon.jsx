@@ -231,6 +231,29 @@ const PATHS = {
       <path d="m15.6 15.6-2 2M17.4 17.4l-2 2" />
     </>
   ),
+  undo: (
+    <>
+      <path d="M8 5 4 9l4 4" />
+      <path d="M4 9h9a5.5 5.5 0 0 1 0 11H9" />
+    </>
+  ),
+  redo: (
+    <>
+      <path d="m16 5 4 4-4 4" />
+      <path d="M20 9h-9a5.5 5.5 0 0 0 0 11h4" />
+    </>
+  ),
+  bookmark: (
+    <>
+      <path d="M7 4.5h10a1 1 0 0 1 1 1V20l-6-3.4L6 20V5.5a1 1 0 0 1 1-1z" />
+    </>
+  ),
+  columns: (
+    <>
+      <rect x="3.5" y="5" width="17" height="14" rx="2" />
+      <path d="M12 5v14" />
+    </>
+  ),
 };
 
 export default function Icon({ name, size, strokeWidth, className = "" }) {

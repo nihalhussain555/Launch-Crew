@@ -181,3 +181,32 @@ class PanelReport(BaseModel):
     def _target(cls, v):
         v = str(v or "").strip().lower()
         return v if v in {"page", "copy", "design"} else "copy"
+
+
+# ---- Visual editor (one element selected in the live preview)
+class VisualPatch(BaseModel):
+    """One minimal edit aimed at the file that declares the selected element.
+
+    `set` is deliberately absent: a click on one element is not a licence to rewrite a document.
+    """
+    file: Annotated[str, Field(min_length=1, max_length=64)]
+    op: str = "replace"
+    find: Annotated[str, Field(max_length=8000)] = ""
+    replace: Annotated[str, Field(max_length=8000)] = ""
+    note: Annotated[str, Field(max_length=200)] = ""
+
+    @field_validator("op", mode="before")
+    @classmethod
+    def _op(cls, v):
+        op = str(v or "replace").strip().lower()
+        if op not in {"replace", "replace_all", "append"}:
+            raise ValueError(f"'{op}' is not a visual edit - choose replace, replace_all or append")
+        return op
+
+    @model_validator(mode="after")
+    def _has_something_to_match(self):
+        if self.op in ("replace", "replace_all") and not self.find.strip():
+            raise ValueError("a visual patch needs `find`: the exact text in that file to change")
+        if self.op == "append" and not self.replace.strip():
+            raise ValueError("an append needs the text to add in `replace`")
+        return self

@@ -73,6 +73,28 @@ def _line_at(text: str, pos: int) -> int:
     return text.count("\n", 0, pos) + 1
 
 
+def _rule_start(text: str, pos: int) -> int:
+    """Advance to the character that actually begins a selector.
+
+    The selector pattern is `[^{}@;]+`, which happily swallows everything sitting between the previous
+    rule's `}` and this rule's first real token - the newline that ended that rule, the blank line after
+    it, and a `/* comment */` naming the section below. Counting lines from the raw match start would
+    report every rule that follows a comment as living on the comment's line, and a reader who opens the
+    file at the number the index gives finds prose instead of code.
+    """
+    while pos < len(text):
+        if text[pos] in " \t\r\n":
+            pos += 1
+        elif text.startswith("/*", pos):
+            end = text.find("*/", pos + 2)
+            if end < 0:
+                return pos                      # an unterminated comment stays where it is
+            pos = end + 2                       # then keep looking: the rule is after the comment, not on it
+        else:
+            return pos
+    return pos
+
+
 def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "ignore")).hexdigest()[:12]
 
@@ -91,7 +113,7 @@ def scan_css(text: str, file: str, where: str, symbols: list, refs: list) -> boo
     """Selectors, custom properties and asset references inside a stylesheet."""
     truncated = False
     for m in CSS_RULE_RE.finditer(text):
-        line = _line_at(text, m.start())
+        line = _line_at(text, _rule_start(text, m.start()))
         for part in m["sel"].split(","):
             # A selector is a *reference*: the element it names is declared in the markup, not here.
             for ident in re.findall(r"#([\w-]+)", part):

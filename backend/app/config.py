@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     max_revisions: int = 5
     engineer_max_tokens: int = 6000
 
+    # Workspace history: whole-file-set snapshots kept per run. Each one is the state an undo, a redo
+    # or a restore returns to, so a larger number buys a longer rollback window and stores more blobs.
+    workspace_versions_keep: int = 20
+
+    # Preview links: how long one expiring, revocable "open in a new tab" ticket stays valid, and how many
+    # may be live for a single run at once. Both are ceilings, not quotas - a run is normally on one.
+    preview_ttl_seconds: int = 300
+    preview_tickets_per_run: int = 5
+
     # Artifact storage (HTML + screenshots): "mongo" (default, survives redeploys) or "local" (STORAGE_DIR).
     storage_backend: str = "mongo"
     storage_dir: str = "./data/artifacts"

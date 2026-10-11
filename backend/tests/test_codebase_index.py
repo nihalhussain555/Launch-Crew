@@ -152,3 +152,18 @@ def test_file_limit_is_honest():
 def test_scanners_do_not_crash_on_fragments(text, language, kind):
     part = ci.scan(f"frag.{language}", text, language)
     assert part["file"]["indexed"]
+
+
+CSS_NUMBERED = ":root{--ink:#0B1220}\n\n/* Hero */\n#hero{color:var(--ink)}\n" \
+               ".card{padding:1px}\n@media(min-width:720px){\n  .card{padding:2px}\n}\n"
+
+
+def test_css_rule_lines_land_on_the_rule_not_on_the_blank_or_comment_above_it():
+    """A selector match begins where the previous rule ended, so the line has to be read forward to the
+    selector itself: `#hero` is on line 4, and a reader who opens styles.css at the number the index
+    gives must find the rule, not the `/* Hero */` that introduces it."""
+    x = ci.scan("styles.css", CSS_NUMBERED, "css")
+    assert [r["line"] for r in x["refs"] if r["kind"] == "css-id" and r["to"] == "hero"] == [4]
+    assert [r["line"] for r in x["refs"] if r["kind"] == "css-class" and r["to"] == "card"] == [5, 7]
+    assert [r["line"] for r in x["refs"] if r["kind"] == "css-var"] == [4]      # used inside #hero
+    assert [s["line"] for s in x["symbols"] if s["name"] == "ink"] == [1]       # declared in :root

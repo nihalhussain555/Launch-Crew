@@ -174,15 +174,18 @@ async def get_version_html(run_id: str, version: int, request: Request, db=Depen
 @router.get("/{run_id}/diff")
 async def get_diff(run_id: str, request: Request, frm: int = Query(alias="from"), to: int = Query(),
                    db=Depends(get_db), user=Depends(get_current_user)):
-    """Git-style unified diff between two saved versions of this run's page."""
+    """Git-style diff between two saved versions of this run's page, in both readings.
+
+    `rows` interleaves the change as a unified diff; `side` pairs the same lines left against right so
+    a replacement reads in place. Both are capped, and `truncated` says when the cap was reached.
+    """
     state = (await own_run(db, run_id, user)).get("state", {})
     old, new = _version(state, frm), _version(state, to)
     a = (await request.app.state.storage.load(old["key"])).decode("utf-8")
     b = (await request.app.state.storage.load(new["key"])).decode("utf-8")
-    d = differ.diff(a, b, f"v{frm}", f"v{to}")
     return {"from": {"v": frm, "note": old.get("note"), "at": old.get("at")},
             "to": {"v": to, "note": new.get("note"), "at": new.get("at")},
-            **d, **differ.stats(a, b)}
+            **differ.compare(a, b, f"v{frm}", f"v{to}"), **differ.stats(a, b)}
 
 
 # --------------------------------------------------------------------------- workspace: AI actions

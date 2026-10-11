@@ -29,7 +29,8 @@ GROUPS = {
                    "llm_request_timeout_s", "llm_backoff_base_s", "llm_backoff_max_s"),
     "Tools": ("tavily_api_key", "netlify_auth_token"),
     "Guardrails": ("max_steps", "max_token_budget", "agent_timeout_s", "max_critic_iterations",
-                   "tool_rounds_cap", "runs_per_hour", "max_revisions", "engineer_max_tokens"),
+                   "tool_rounds_cap", "runs_per_hour", "max_revisions", "engineer_max_tokens",
+                   "workspace_versions_keep", "preview_ttl_seconds", "preview_tickets_per_run"),
     "Storage": ("storage_backend", "storage_dir"),
 }
 REQUIRED = {"jwt_secret", "mongo_uri", "mongo_db", "allowed_origin"}
@@ -48,6 +49,9 @@ NOTES = {
     "jwt_secret": "Rotating it signs every existing session out.",
     "max_revisions": "Per-run cap on revise/chat/audit-repair calls; each one can rebuild the page.",
     "engineer_max_tokens": "Budget for one page build. Too low truncates the document mid-markup.",
+    "workspace_versions_keep": "Whole-file-set snapshots held per run: how far undo and restore reach back.",
+    "preview_ttl_seconds": "How long one live-preview link stays valid before it has to be re-issued.",
+    "preview_tickets_per_run": "Preview links open per run; issuing a newer one retires the older links.",
 }
 
 

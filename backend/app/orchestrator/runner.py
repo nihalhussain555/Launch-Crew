@@ -7,6 +7,7 @@ from pymongo import ReturnDocument
 from app.config import Settings
 from app.orchestrator.graph import Orchestrator
 from app.orchestrator.state import GuardrailError, RunContext, RunState
+from app.services import visual_edit
 from app.utils.logger import get_logger
 
 log = get_logger("runner")
@@ -153,6 +154,33 @@ async def workspace_apply_pipeline(app_state, run_id: str, changes: list[dict], 
         await _keep_last_good(app_state, run_id, ctx, exc, "Workspace change")
 
 
+async def visual_apply_pipeline(app_state, run_id: str, changes: list[dict], request: str,
+                                proposal_id: str) -> None:
+    """Apply a reviewed visual patch and write the outcome back on the proposal (POST /visual/apply).
+
+    The change itself is the workspace pipeline's, so it gets the same pre-change checkpoint, the same
+    sanitizer and Chromium pass afterwards, and the same "last version is still yours" recovery if it
+    fails. Only the attribution differs: history records this as a visual edit, and the proposal says
+    which element it was about.
+    """
+    ctx = await ctx_for(app_state, run_id)
+    try:
+        plan = await Orchestrator(ctx).apply_workspace_changes(changes, request, kind="visual edit")
+        entry = visual_edit.find_proposal(ctx.state, proposal_id)
+        entry["plan"] = plan["id"]
+        visual_edit.mark_proposal(entry, "applied", **plan["result"])
+        await ctx.checkpoint()
+    except Exception as exc:  # noqa: BLE001
+        try:
+            entry = visual_edit.find_proposal(ctx.state, proposal_id)
+            visual_edit.mark_proposal(entry, "rejected",
+                                       error=(getattr(exc, "message", None) or str(exc))[:300])
+            await ctx.checkpoint()
+        except Exception:  # noqa: BLE001 - the proposal is a record, never a reason to lose the page
+            log.warning("visual proposal %s on run %s could not be marked", proposal_id, run_id)
+        await _keep_last_good(app_state, run_id, ctx, exc, "Visual edit")
+
+
 async def workspace_restore_pipeline(app_state, run_id: str, w: int) -> None:
     """Roll the whole file set back to a captured snapshot (POST /workspace/restore)."""
     ctx = await ctx_for(app_state, run_id)
@@ -160,6 +188,20 @@ async def workspace_restore_pipeline(app_state, run_id: str, w: int) -> None:
         await Orchestrator(ctx).restore_workspace_snapshot(w)
     except Exception as exc:  # noqa: BLE001
         await _keep_last_good(app_state, run_id, ctx, exc, "Workspace restore")
+
+
+async def step_pipeline(app_state, run_id: str, side: str) -> None:
+    """Undo or redo one recorded change (POST /workspace/undo, POST /workspace/redo).
+
+    The workspace snapshot the move left behind is what makes it reversible, so a failure here is
+    reported against the timeline rather than silently leaving the run somewhere else.
+    """
+    ctx = await ctx_for(app_state, run_id)
+    try:
+        step = ctx.state.undo_stack[-1] if side == "undo" else ctx.state.redo_stack[-1]
+        await (Orchestrator(ctx).undo() if side == "undo" else Orchestrator(ctx).redo())
+    except Exception as exc:  # noqa: BLE001
+        await _keep_last_good(app_state, run_id, ctx, exc, f"{'Undo' if side == 'undo' else 'Redo'} of w{step}")
 
 
 async def claim_for_revision(db, run_id: str, user_id: str) -> bool:

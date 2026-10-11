@@ -6,6 +6,7 @@ os.environ.update({"MOCK_LLM": "true", "MONGO_URI": "mock://", "JWT_SECRET": "te
 
 import pytest
 
+from app.api import routes_auth
 from app.config import Settings
 from app.llm.client import LLMClient
 from app.orchestrator.state import RunContext, RunState
@@ -13,6 +14,18 @@ from app.tools.file_writer import LocalStorage
 
 GOOD_CHECKS = [{"id": "overflow", "label": "x", "viewport": "mobile", "passed": True, "severity": "error", "detail": ""}]
 BAD_CHECKS = [{"id": "contrast", "label": "x", "viewport": "desktop", "passed": False, "severity": "error", "detail": "bad"}]
+
+
+@pytest.fixture(autouse=True)
+def _no_auth_rate_limit():
+    """The suite registers and logs in far more often in one minute than any real client can.
+
+    The limiter is production behaviour and stays armed; only its memory of this test process is cleared,
+    so a 429 in a test always means the route under test decided it, not the suite's own traffic.
+    """
+    routes_auth._auth_limiter._hits.clear()
+    yield
+    routes_auth._auth_limiter._hits.clear()
 
 
 def make_settings(**kw) -> Settings:

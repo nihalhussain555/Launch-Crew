@@ -4,11 +4,13 @@ import EmptyState from "./EmptyState";
 import ErrorState from "./ErrorState";
 import Icon from "./Icon";
 import Modal from "./Modal";
+import { DiffBody, DiffModeToggle } from "./DiffView";
 
 /** Git-style diff between two saved versions of this run's page. */
 export default function DiffModal({ open, onClose, run, range, setRange }) {
   const [versions, setVersions] = useState(null);
   const [data, setData] = useState(null);
+  const [mode, setMode] = useState("unified");
   const [err, setErr] = useState("");
   const [again, setAgain] = useState(0);   // bump to re-request the current range
 
@@ -64,26 +66,20 @@ export default function DiffModal({ open, onClose, run, range, setRange }) {
       )}
       {!err && data && (
         <>
-          <p className="diff-summary">
-            <span className="pill add">+{data.added}</span>
-            <span className="pill del">-{data.removed}</span>
-            <span className="muted small">
-              v{range.from} ({data.from.note}) to v{range.to} ({data.to.note}).
-              Markup is broken onto lines so a change reads as a change.
-            </span>
-          </p>
+          <div className="row wrap between">
+            <p className="diff-summary">
+              <span className="pill add">+{data.added}</span>
+              <span className="pill del">-{data.removed}</span>
+              <span className="muted small">
+                v{range.from} ({data.from.note}) to v{range.to} ({data.to.note}).
+                {data.truncated ? " Rows beyond the first " + data.rows.length + " are not shown." : ""}
+              </span>
+            </p>
+            <DiffModeToggle mode={mode} setMode={setMode} />
+          </div>
           {!data.changed
             ? <EmptyState icon="check" title="No differences" text="These two builds render the same page." />
-            : (
-              <div className="diff" role="table" aria-label="Differences between versions">
-                {data.rows.map((r, i) => (
-                  <div key={i} className={`diff-line ${r.kind}`} role="row">
-                    <span className="diff-mark" aria-hidden="true">{r.kind === "add" ? "+" : r.kind === "del" ? "-" : r.kind === "hunk" ? "@" : " "}</span>
-                    <span className="diff-text">{r.text}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+            : <DiffBody rows={data.rows} side={data.side} mode={mode} />}
         </>
       )}
     </Modal>

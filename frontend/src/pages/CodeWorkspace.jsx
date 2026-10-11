@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { DiffBody, DiffModeToggle } from "../components/DiffView";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import Icon from "../components/Icon";
+import LivePreview from "../components/LivePreview";
 import RunPicker, { useRunPick } from "../components/RunPicker";
 import Tabs from "../components/Tabs";
+import VisualEditor from "../components/VisualEditor";
 import { useRun } from "../hooks/useRun";
 import { useToast } from "../toast";
 import { timeAgo } from "../utils";
@@ -43,7 +46,7 @@ export default function CodeWorkspace() {
   const { runId, setRunId } = useRunPick();
   const { run, setRun, err, refresh, working } = useRun(runId);
   const toast = useToast();
-  const [tab, setTab] = useState("files");
+  const [tab, setTab] = useState("preview");
   const [data, setData] = useState(null);
   const [dataErr, setDataErr] = useState("");
   const [index, setIndex] = useState(null);
@@ -53,9 +56,15 @@ export default function CodeWorkspace() {
   const [changes, setChanges] = useState([blank()]);
   const [request, setRequest] = useState("");
   const [plan, setPlan] = useState(null);
+  const [mode, setMode] = useState("unified");
   const [shown, setShown] = useState(null);
+  const [sel, setSel] = useState(null);          // the element the preview frame reported
+  const [picking, setPicking] = useState(false); // the frame is armed for one click
 
   const version = run?.state?.html_version || 0;
+  // A published page that moved is a page whose selections no longer describe anything real.
+  useEffect(() => { setSel(null); setPicking(false); }, [runId, version]);
+
   useEffect(() => {
     setData(null); setDataErr(""); setIndex(null); setPlan(null); setShown(null); setReport(null);
     if (!runId) return undefined;
@@ -97,7 +106,12 @@ export default function CodeWorkspace() {
   const apply = async () => {
     setBusy("apply");
     try {
-      setRun(await api.wsApply(runId, { changes: changes.filter((c) => c.file), request: request.trim() }));
+      // the version this plan was measured against, so a change that landed in another tab is refused
+      setRun(await api.wsApply(runId, {
+        changes: changes.filter((c) => c.file),
+        request: request.trim(),
+        base_version: plan?.base_version,
+      }));
       toast("Change queued — the page is rebuilding and re-checking", "success");
       await refresh();
       await reload();
@@ -124,6 +138,7 @@ export default function CodeWorkspace() {
   };
 
   const tabs = useMemo(() => [
+    { id: "preview", label: "Live preview" },
     { id: "files", label: "Files", badge: data?.files?.length || null },
     { id: "index", label: "Index", badge: index?.counts?.symbols || null },
     { id: "impact", label: "Impact analysis" },
@@ -153,12 +168,27 @@ export default function CodeWorkspace() {
             <span className={`pill ${working ? "warn" : ""}`}>{data.status.replace(/_/g, " ")}</span>
             <span className="pill">{data.files.length} file(s)</span>
             <span className="pill">{Math.max(1, Math.round(total / 1024))} KB</span>
-            <span className="pill">{data.snapshots.length} snapshot(s)</span>
+            <span className="pill">{data.snapshots.length}/{data.limits.keep_snapshots} snapshot(s)</span>
             <span className="pill">{data.revisions} edit(s) used</span>
             {data.latest_snapshot > 0 && <span className="pill">latest w{data.latest_snapshot}</span>}
+            <span className={`pill ${data.undo?.can_undo ? "ok" : ""}`}>
+              {data.undo?.can_undo ? `${data.undo.undo_steps} step(s) to undo` : "nothing to undo yet"}
+            </span>
+            {data.undo?.can_redo && <span className="pill">{data.undo.redo_steps} to redo</span>}
           </div>
 
           <Tabs tabs={tabs} active={tab} onChange={setTab} />
+
+          {tab === "preview" && (
+            <div className="ve-grid">
+              <LivePreview runId={runId} version={version} working={working}
+                selecting={picking} onPickingChange={setPicking} onSelect={setSel} />
+              <VisualEditor runId={runId} version={version} element={sel} picking={picking}
+                onPick={() => setPicking(true)} onClear={() => setSel(null)}
+                setRun={setRun} refresh={refresh} reload={reload}
+                working={working} editable={editable} undo={data.undo} />
+            </div>
+          )}
 
           {tab === "files" && (data.files.length ? (
             <>
@@ -356,28 +386,28 @@ export default function CodeWorkspace() {
                 <section className="card stack">
                   <div className="row wrap between">
                     <h2>{plan.headline}</h2>
-                    <span className={`pill ${plan.safe_to_apply ? "ok" : "err"}`}>{plan.safe_to_apply ? "no blocking risks" : `${plan.impact.counts.errors} blocking risk(s)`}</span>
+                    <div className="row wrap">
+                      <span className={`pill ${plan.safe_to_apply ? "ok" : "err"}`}>{plan.safe_to_apply ? "no blocking risks" : `${plan.impact.counts.errors} blocking risk(s)`}</span>
+                      <DiffModeToggle mode={mode} setMode={setMode} />
+                    </div>
                   </div>
                   <ul className="projection-list">
                     {plan.projection.files.map((r) => (
                       <li key={r.file}>
                         <div className="row wrap"><strong>{r.file}</strong>
-                          <span className={`pill ${r.status === "changed" ? "" : "warn"}`}>{r.status}</span>
+                          <span className={`pill ${r.status === "changed" || r.status === "unchanged" ? "" : "warn"}`}>{r.status}</span>
+                          {r.from && <span className="muted small mono">was {r.from}</span>}
                           <span className="pill add">+{r.lines_added}</span><span className="pill del">-{r.lines_removed}</span></div>
                       </li>
                     ))}
                   </ul>
+                  <p className="muted small">Measured against page v{plan.base_version}. If the workspace moves before you
+                    apply, the apply is refused rather than written over an edit you never saw.</p>
                   {Object.entries(plan.diffs || {}).map(([name, d]) => (
                     <div key={name} className="stack">
-                      <p className="muted small mono">{name} · +{d.added} -{d.removed}</p>
-                      <div className="diff" role="table" aria-label={`Projected diff for ${name}`}>
-                        {d.rows.map((r, i) => (
-                          <div key={i} className={`diff-line ${r.kind}`} role="row">
-                            <span className="diff-mark" aria-hidden="true">{r.kind === "add" ? "+" : r.kind === "del" ? "-" : r.kind === "hunk" ? "@" : " "}</span>
-                            <span className="diff-text">{r.text}</span>
-                          </div>
-                        ))}
-                      </div>
+                      <p className="muted small mono">{name} · +{d.added} -{d.removed}
+                        {d.truncated ? " · rows truncated" : ""}</p>
+                      <DiffBody rows={d.rows} side={d.side} mode={mode} />
                     </div>
                   ))}
                   <Risks risks={plan.impact.risks} />
@@ -398,7 +428,14 @@ export default function CodeWorkspace() {
                       <span className="pill">{data.validation.check_errors} error(s)</span>
                       <span className="pill">{data.validation.check_warnings} warning(s)</span>
                       {data.validation.readiness != null && <span className="pill">readiness {data.validation.readiness}</span>}
-                      {data.validation.restored_from && <span className="pill">from w{data.validation.restored_from}</span>}
+                      {data.validation.workspace_version && <span className="pill">from w{data.validation.workspace_version}</span>}
+                      {data.validation.restored_from && <span className="pill">restored w{data.validation.restored_from}</span>}
+                      {data.validation.step && data.validation.step !== "restore" && (
+                        <span className="pill ok">{data.validation.step} done</span>
+                      )}
+                      {!!data.validation.renamed?.length && (
+                        <span className="pill warn">{data.validation.renamed.length} renamed</span>
+                      )}
                     </div>
                   )}
                   {data.changed_files && (
@@ -407,6 +444,11 @@ export default function CodeWorkspace() {
                       <span className="pill add">+{data.changed_files.lines_added}</span>
                       <span className="pill del">-{data.changed_files.lines_removed}</span>
                       {(data.changed_files.changed || []).map((n) => <span key={n} className="pill mono">{n}</span>)}
+                      {(data.changed_files.added || []).map((n) => <span key={n} className="pill ok">+ {n}</span>)}
+                      {(data.changed_files.removed || []).map((n) => <span key={n} className="pill err">- {n}</span>)}
+                      {(data.changed_files.renamed || []).map((r) => (
+                        <span key={`${r.from}>${r.to}`} className="pill warn mono">{r.from} → {r.to}</span>
+                      ))}
                     </div>
                   )}
                 </section>

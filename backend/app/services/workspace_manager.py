@@ -8,7 +8,10 @@ never supported. Two invariants make that safe:
    `<style>` / `<script>` blocks on every publish, so a patch to one of them is folded back into that
    block here, or the next build would silently undo it.
 2. Nothing is overwritten without a snapshot. `capture()` stores the whole file set first, so any
-   applied change - or the model-driven rebuilds - can be restored by workspace version.
+   applied change - a hand-written patch, a chat edit, a crew rebuild or a restore - can be put back
+   by workspace version. Those snapshots are the undo/redo timeline: `record_change` marks each one as
+   a step back, `step_back`/`step_forward` walk it, and a restore creates a snapshot of its own rather
+   than erasing history.
 
 Everything here is deterministic: no LLM, no network, no host filesystem (paths are checked against
 the run's recorded file set, never resolved against disk).
@@ -28,9 +31,15 @@ from app.tools.sanitizer import sanitize_html
 MAX_PATCH_BYTES = 60_000          # one patch's worth of new text
 MAX_WORKSPACE_FILE_BYTES = 200_000  # per file: keeps it indexable (see codebase_index)
 MAX_NAME_CHARS = 64
-KEEP_WORKSPACE_VERSIONS = 10
+MAX_LABEL_CHARS = 80
+KEEP_WORKSPACE_VERSIONS = 20      # fallback when the settings field is absent
+MAX_UNDO_STEPS = 50               # undo/redo pointers held per run; the snapshots themselves are pruned
 ALLOWED_EXTENSIONS = {"html", "htm", "css", "js", "mjs", "md", "py", "json", "txt"}
 OPS = ("replace", "replace_all", "append", "set")
+
+# The kinds of change that get a checkpoint, so history says who moved the workspace and why.
+CAUSE_KINDS = ("crew rebuild", "file patch", "workspace restore", "version restore", "manual checkpoint",
+               "visual edit", "unattributed")
 
 # Files the crew rewrites itself: patching them here would be undone by the next build.
 GENERATED_ONLY = {"README.md"}
@@ -207,14 +216,28 @@ async def index_workspace(ctx, *, version: int | None = None) -> dict:
 
 
 def stats(before: dict[str, str], after: dict[str, str]) -> dict:
-    """Per-file line movement for an applied change set."""
+    """Per-file movement between two file sets: added, changed, renamed, removed, unchanged.
+
+    A rename is one row, not a deletion plus an addition: the content is identical, so it moves no
+    lines. Detecting it matters because a rebuild that re-names an asset otherwise reads as though
+    the crew threw a file away and wrote a new one.
+    """
+    renames = _detect_renames(before, after)
+    moved_from = set(renames.values())
     rows = []
     for name in sorted(set(before) | set(after)):
         a, b = before.get(name, ""), after.get(name, "")
-        if name not in before:
+        if name in renames:
+            src = renames[name]
+            rows.append({"file": name, "status": "renamed", "from": src,
+                         "bytes_before": len(before[src].encode()), "bytes_after": len(b.encode()),
+                         "lines_added": 0, "lines_removed": 0})
+        elif name not in before:
             rows.append({"file": name, "status": "added", "bytes_before": 0, "bytes_after": len(b.encode()),
                          "lines_added": b.count("\n") + 1, "lines_removed": 0})
         elif name not in after:
+            if name in moved_from:
+                continue
             rows.append({"file": name, "status": "removed", "bytes_before": len(a.encode()), "bytes_after": 0,
                          "lines_added": 0, "lines_removed": a.count("\n") + 1})
         else:
@@ -224,12 +247,45 @@ def stats(before: dict[str, str], after: dict[str, str]) -> dict:
                          "lines_added": d["lines_added"], "lines_removed": d["lines_removed"]})
     return {"files": rows,
             "changed": [r["file"] for r in rows if r["status"] == "changed"],
+            "added": [r["file"] for r in rows if r["status"] == "added"],
+            "removed": [r["file"] for r in rows if r["status"] == "removed"],
+            "renamed": [{"from": r["from"], "to": r["file"]} for r in rows if r["status"] == "renamed"],
             "lines_added": sum(r["lines_added"] for r in rows),
             "lines_removed": sum(r["lines_removed"] for r in rows)}
 
 
-async def capture(ctx, *, note: str = "", changed: list[str] | None = None) -> dict:
-    """Snapshot every workspace file so this state can be restored later."""
+def _detect_renames(before: dict[str, str], after: dict[str, str]) -> dict[str, str]:
+    """New names whose bytes are identical to a name that disappeared, matched by digest."""
+    gone: dict[str, list[str]] = {}
+    for name, text in before.items():
+        if name not in after and text.strip():
+            gone.setdefault(_digest(text.encode("utf-8", "ignore")), []).append(name)
+    out: dict[str, str] = {}
+    for name in sorted(after):
+        if name in before or not after[name].strip():
+            continue
+        digest = _digest(after[name].encode("utf-8", "ignore"))
+        bucket = gone.get(digest)
+        if bucket:
+            out[name] = bucket.pop(0)
+            if not bucket:
+                gone.pop(digest)
+    return out
+
+
+def kept_count(ctx) -> int:
+    """How many whole-file-set snapshots this deployment holds, from settings or the module default."""
+    return max(1, int(getattr(ctx.settings, "workspace_versions_keep", KEEP_WORKSPACE_VERSIONS)
+                      or KEEP_WORKSPACE_VERSIONS))
+
+
+async def capture(ctx, *, note: str = "", changed: list[str] | None = None,
+                  cause: dict | None = None, label: str = "") -> dict:
+    """Snapshot every workspace file so this state can be restored later.
+
+    `cause` records what the change was and which agent or plan owned it, so a history entry explains
+    itself without anyone re-reading the events: `{"kind", "agent", "plan", "version"}`.
+    """
     s, storage = ctx.state, ctx.storage
     if not s.files:
         raise WorkspaceError("Nothing to snapshot: this run has no workspace files yet", 409)
@@ -240,12 +296,15 @@ async def capture(ctx, *, note: str = "", changed: list[str] | None = None) -> d
         key = await storage.save(ctx.run_id, f"workspace/w{number}/{f['name']}", data)
         entries.append({"name": f["name"], "key": key, "bytes": len(data), "hash": _digest(data)})
     record = {"w": number, "at": stamp(), "note": note or "Workspace snapshot",
+              "label": (label or "").strip()[:MAX_LABEL_CHARS],
+              "cause": clean_cause(cause),
               "html_version": s.html_version, "files": entries, "changed": changed or []}
     s.workspace_versions.append(record)
 
-    dropped = s.workspace_versions[:-KEEP_WORKSPACE_VERSIONS]
+    keep = kept_count(ctx)
+    dropped = s.workspace_versions[:-keep]
     if dropped:
-        s.workspace_versions = s.workspace_versions[-KEEP_WORKSPACE_VERSIONS:]
+        s.workspace_versions = s.workspace_versions[-keep:]
         for old in dropped:
             for entry in old["files"]:
                 try:
@@ -255,16 +314,147 @@ async def capture(ctx, *, note: str = "", changed: list[str] | None = None) -> d
     return record
 
 
+def clean_cause(cause: dict | None) -> dict:
+    """The attribution a history entry is allowed to carry: a known kind, and names, not prose.
+
+    An unrecognised kind is recorded as `unattributed` rather than rounded onto the nearest real one -
+    history that guesses is worse than history that admits it does not know.
+    """
+    cause = cause or {}
+    kind = cause.get("kind") if cause.get("kind") in CAUSE_KINDS else "unattributed"
+    out = {"kind": kind, "agent": (cause.get("agent") or "")[:40],
+           "plan": (cause.get("plan") or "")[:12], "run_id": (cause.get("run_id") or "")[:40]}
+    try:
+        out["version"] = int(cause.get("version") or 0)
+    except (TypeError, ValueError):
+        out["version"] = 0
+    return {k: v for k, v in out.items() if v not in ("", 0)}
+
+
+async def checkpoint(ctx, *, note: str = "", label: str = "") -> dict:
+    """A named snapshot the user asked for, taken because they want it kept, not because a change comes.
+
+    Deliberately not an undo step: nothing moved, so the timeline must not claim it did.
+    """
+    text = (label or "").strip()
+    record = await capture(ctx, note=(note or text or "Named checkpoint"), changed=[],
+                           cause={"kind": "manual checkpoint", "version": ctx.state.html_version},
+                           label=text)
+    return record
+
+
+def label_snapshot(versions: list[dict], w: int, label: str) -> dict:
+    """Name a snapshot so a later reader can tell the release candidate from the experiment.
+
+    Takes the list rather than a context: renaming history is a write to one record, and a route that
+    does it needs no run context and no model.
+    """
+    text = (label or "").strip()
+    if not text:
+        raise WorkspaceError("A snapshot name cannot be empty; use a clear label or leave it unnamed")
+    entry = find_snapshot(versions, w)
+    entry["label"] = text[:MAX_LABEL_CHARS]
+    return entry
+
+
+# ------------------------------------------------------------------ undo / redo over the snapshot timeline
+
+def _kept(state, stack: list[int]) -> list[int]:
+    """Drop pointers to snapshots the keep window has already pruned, so a step never 404s."""
+    present = {v.get("w") for v in state.workspace_versions or []}
+    return [w for w in stack or [] if w in present]
+
+
+def _bounded(stack: list[int]) -> list[int]:
+    return stack[-MAX_UNDO_STEPS:]
+
+
+def record_change(state, w: int) -> None:
+    """A change landed. Its pre-change snapshot is the way back, and nothing forward is redoable now."""
+    state.undo_stack = _bounded(_kept(state, state.undo_stack) + [w])
+    state.redo_stack = []
+
+
+def record_step(state, w: int, *, forward: bool) -> None:
+    """One undo or redo, recorded as the pointer swap it is.
+
+    The step spends the pointer it used and keeps the state it left as the reverse move, so walking
+    back three steps never destroys the ability to walk forward again. `w` is the snapshot of the
+    page as it stood immediately before this move, which is exactly what the opposite step restores.
+    """
+    if forward:  # redo: one pointer off the redo side, one onto the undo side
+        state.redo_stack = _kept(state, state.redo_stack)[:-1]
+        state.undo_stack = _bounded(_kept(state, state.undo_stack) + [w])
+    else:        # undo
+        state.undo_stack = _kept(state, state.undo_stack)[:-1]
+        state.redo_stack = _bounded(_kept(state, state.redo_stack) + [w])
+
+
+def next_step(state, side: str) -> int:
+    """The snapshot the next undo (or redo) would restore - read without spending it.
+
+    A restore that fails before it captures anything leaves here, so the pointer it read is still
+    there and the timeline stays walkable; the swap only happens with the snapshot the move takes.
+    """
+    stack = _kept(state, state.undo_stack if side == "undo" else state.redo_stack)
+    if not stack:
+        raise WorkspaceError(
+            "Nothing to undo: no checkpoint has been recorded for this workspace yet (checkpoints older "
+            "than the kept window are gone)" if side == "undo" else
+            "Nothing to redo: the workspace has not been stepped back", 409)
+    return stack[-1]
+
+
+def undo_status(state) -> dict:
+    """What the interface needs to say about the timeline without guessing."""
+    return _status(_kept(state, state.undo_stack), _kept(state, state.redo_stack))
+
+
+def status_of(state: dict) -> dict:
+    """The same view for a run document's state dict, so a read-only route needs no context."""
+    state = state or {}
+    present = {v.get("w") for v in state.get("workspace_versions") or []}
+    return _status([w for w in state.get("undo_stack") or [] if w in present],
+                   [w for w in state.get("redo_stack") or [] if w in present])
+
+
+def _status(back: list[int], forward: list[int]) -> dict:
+    return {"can_undo": bool(back), "can_redo": bool(forward),
+            "undo_steps": len(back), "redo_steps": len(forward),
+            "next_undo": back[-1] if back else None, "next_redo": forward[-1] if forward else None}
+
+
+# ------------------------------------------------------------------ conflict detection
+
+def check_base(state, base_version: int | None) -> None:
+    """Refuse to write over a newer change: a view built on v3 must not apply at v5 unnoticed.
+
+    The caller sends back the version it read. Anything else means another edit - a second tab, a crew
+    run, an undo - moved the workspace in between, so the plan was measured against a page that no
+    longer exists.
+    """
+    if base_version is None or base_version == state.html_version:
+        return
+    raise WorkspaceError(f"Conflict: this change was planned against v{base_version}, but the workspace is "
+                         f"now at v{state.html_version}. Read it again and re-plan before applying, or the "
+                         f"newer change is lost.", 409)
+
+
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:12]
 
 
-def snapshot_of(ctx, w: int) -> dict:
-    entry = next((v for v in ctx.state.workspace_versions or [] if v.get("w") == w), None)
+def find_snapshot(versions: list[dict], w: int) -> dict:
+    """One snapshot record out of a state's list, by its number."""
+    entry = next((v for v in versions or [] if v.get("w") == w), None)
     if not entry:
         raise WorkspaceError(f"No workspace snapshot w{w}. Kept: "
-                             f"{', '.join(str(v.get('w')) for v in ctx.state.workspace_versions or [])}", 404)
+                             f"{', '.join(str(v.get('w')) for v in versions or [])}", 404)
     return entry
+
+
+def snapshot_of(ctx, w: int) -> dict:
+    return find_snapshot(ctx.state.workspace_versions, w)
 
 
 async def snapshot_page(ctx, w: int) -> str:

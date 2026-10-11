@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import ConfirmModal from "../components/ConfirmModal";
+import { DiffModeToggle, FileDiffList } from "../components/DiffView";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
 import Icon from "../components/Icon";
@@ -31,27 +33,62 @@ function SnapshotFiles({ files }) {
   );
 }
 
-function DiffBlock({ files }) {
+/** One checkpoint row: what it is called, what caused it, and what it can be asked to do next. */
+function SnapshotRow({ s, editable, busy, openFiles, onFiles, onCompare, onRestore, onRename }) {
+  const [naming, setNaming] = useState(null);      // the label being typed, or null when the row is idle
+  const c = s.cause || {};
   return (
-    <div className="stack">
-      {files.map((f) => (
-        <div key={f.file} className="stack">
-          <p className="muted small">
-            <strong className="mono">{f.file}</strong> · +{f.added} -{f.removed}{f.truncated ? " · rows truncated" : ""}
-          </p>
-          {!f.changed ? <p className="muted small">Identical in both states.</p> : (
-            <div className="diff" role="table" aria-label={`Diff for ${f.file}`}>
-              {f.rows.map((r, i) => (
-                <div key={i} className={`diff-line ${r.kind}`} role="row">
-                  <span className="diff-mark" aria-hidden="true">{r.kind === "add" ? "+" : r.kind === "del" ? "-" : r.kind === "hunk" ? "@" : " "}</span>
-                  <span className="diff-text">{r.text}</span>
-                </div>
-              ))}
-            </div>
-          )}
+    <li className="ws-item">
+      <div className="row wrap between">
+        <div className="ws-main">
+          <div className="row wrap">
+            <strong>w{s.w}</strong>
+            {s.label && <span className="pill ok"><Icon name="bookmark" size={12} /> {s.label}</span>}
+            <span className="pill">page v{s.html_version}</span>
+            {c.kind && <span className="pill">{c.kind}</span>}
+            {c.agent && <span className="pill mono">{c.agent}</span>}
+            <span className="muted small">{fmtDate(s.at)} · {timeAgo(s.at)}</span>
+          </div>
+          <p className="muted small">{s.note}</p>
+          <div className="row wrap">
+            {(s.changed || []).map((n) => <span key={n} className="pill mono">{n}</span>)}
+          </div>
         </div>
-      ))}
-    </div>
+        <div className="row wrap">
+          <button className="btn ghost small" onClick={() => onFiles(s.w)} disabled={busy === `d${s.w}`}
+            aria-expanded={openFiles}>
+            <Icon name={openFiles ? "eyeOff" : "eye"} size={14} /> {openFiles ? "Hide" : "Files"}
+          </button>
+          <button className="btn ghost small" onClick={() => onCompare(s.w, 0)} disabled={busy === "diff"}>
+            <Icon name="arrowRight" size={14} /> vs live
+          </button>
+          <button className="btn ghost small" onClick={() => setNaming(naming === null ? s.label : null)}>
+            <Icon name="bookmark" size={14} /> {s.label ? "Rename" : "Name"}
+          </button>
+          <button className="btn ghost small" disabled={!editable || busy === "restore"}
+            onClick={() => onRestore(s.w)}>
+            <Icon name="refresh" size={14} /> Restore
+          </button>
+        </div>
+      </div>
+      {naming !== null && (
+        <form className="row wrap rename" onSubmit={(e) => {
+          e.preventDefault();
+          const text = naming.trim();
+          if (!text) return;
+          onRename(s.w, text);
+          setNaming(null);
+        }}>
+          <input value={naming} onChange={(e) => setNaming(e.target.value)} maxLength={80}
+            placeholder="Name this checkpoint" aria-label={`Name for snapshot w${s.w}`} />
+          <button className="btn primary small" type="submit" disabled={!naming.trim()}>Save name</button>
+          <button className="btn ghost small" type="button" onClick={() => setNaming(null)}>Cancel</button>
+        </form>
+      )}
+      {openFiles && (busy === `d${s.w}`
+        ? <div className="skeleton" style={{ height: 90 }} />
+        : <SnapshotFiles files={openFiles.detail.files} />)}
+    </li>
   );
 }
 
@@ -67,6 +104,9 @@ export default function VersionHistory() {
   const [preview, setPreview] = useState(null);  // { v, html } of one page build
   const [pair, setPair] = useState({ w: 0, to: 0 });
   const [diff, setDiff] = useState(null);
+  const [mode, setMode] = useState("unified");   // how the diff rows are read: interleaved or aligned
+  const [cp, setCp] = useState({ label: "", note: "" });
+  const [ask, setAsk] = useState(null);          // { kind, w } the user has to confirm before it moves
   const [busy, setBusy] = useState("");
 
   const version = run?.state?.html_version || 0;
@@ -78,6 +118,8 @@ export default function VersionHistory() {
     api.wsVersions(runId).then((d) => live && setSnaps(d)).catch(() => {});
     return () => { live = false; };
   }, [runId, version]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const reloadSnaps = () => api.wsVersions(runId).then(setSnaps).catch(() => {});
 
   const showSnapshot = async (w) => {
     if (open?.w === w) { setOpen(null); return; }
@@ -116,9 +158,40 @@ export default function VersionHistory() {
   const restoreSnapshot = async (w) => {
     setBusy("restore");
     try {
-      setRun(await api.wsRestore(runId, w));
+      setRun(await api.wsRestore(runId, w, snaps.current_version));
       toast(`Restoring workspace w${w} — every file goes back`, "success");
-      await refresh();
+      await refresh(); await reloadSnaps();
+    } catch (e) { toast(e.message, "error"); } finally { setBusy(""); }
+  };
+
+  const step = async (side) => {
+    setBusy("step");
+    try {
+      const call = side === "undo" ? api.wsUndo : api.wsRedo;
+      setRun(await call(runId, snaps.current_version));
+      toast(side === "undo" ? "Stepping back one change" : "Stepping forward again", "success");
+      await refresh(); await reloadSnaps();
+    } catch (e) { toast(e.message, "error"); } finally { setBusy(""); setAsk(null); }
+  };
+
+  const saveCheckpoint = async (e) => {
+    e.preventDefault();
+    if (!cp.label.trim() && !cp.note.trim()) return;
+    setBusy("checkpoint");
+    try {
+      const out = await api.wsCheckpoint(runId, cp.label.trim(), cp.note.trim());
+      toast(`Checkpoint w${out.snapshot.w} kept - the page did not change`, "success");
+      setCp({ label: "", note: "" });
+      await reloadSnaps();
+    } catch (e2) { toast(e2.message, "error"); } finally { setBusy(""); }
+  };
+
+  const renameSnapshot = async (w, label) => {
+    setBusy(`n${w}`);
+    try {
+      await api.wsLabel(runId, w, label);
+      toast(`w${w} is now named "${label}"`, "success");
+      await reloadSnaps();
     } catch (e) { toast(e.message, "error"); } finally { setBusy(""); }
   };
 
@@ -126,7 +199,20 @@ export default function VersionHistory() {
     { id: "builds", label: "Page builds", badge: builds?.versions?.length || null },
     { id: "snapshots", label: "Workspace snapshots", badge: snaps?.snapshots?.length || null },
   ];
-  const editable = run?.status === "awaiting_approval";
+  const editable = run?.status === "awaiting_approval" && !working;
+  const undo = snaps?.undo || {};
+  const moving = ask && (
+    <ConfirmModal open title={ask.kind === "undo" ? "Undo the last change?" : ask.kind === "redo" ? "Redo that change?" : "Restore this checkpoint?"}
+      confirmLabel={ask.kind === "undo" ? "Undo" : ask.kind === "redo" ? "Redo" : "Restore"}
+      onClose={() => setAsk(null)}
+      onConfirm={() => (ask.kind === "restore" ? restoreSnapshot(ask.w) : step(ask.kind))}>
+      <p className="muted small">
+        {ask.kind === "restore"
+          ? `Every file goes back to how it was at w${ask.w}. Nothing is deleted: the state you are leaving is snapshotted first, so this too can be undone.`
+          : `The crew re-checks the page afterwards, which takes a moment. The run keeps its history: this step is itself one more entry, and one undo away.`}
+      </p>
+    </ConfirmModal>
+  );
 
   return (
     <>
@@ -190,54 +276,61 @@ export default function VersionHistory() {
             </ul>
           ) : <EmptyState icon="book" title="No builds yet" text="The first snapshot lands when the Engineer publishes." />)}
 
+          {tab === "snapshots" && (
+            <div className="row wrap vc-bar">
+              <div className="row wrap">
+                <button className="btn ghost small" disabled={!undo.can_undo || !editable || busy === "step"}
+                  onClick={() => setAsk({ kind: "undo" })} title={undo.can_undo ? `Back to w${undo.next_undo}` : "Nothing recorded yet"}>
+                  <Icon name="undo" size={14} /> Undo{undo.undo_steps ? ` (${undo.undo_steps})` : ""}
+                </button>
+                <button className="btn ghost small" disabled={!undo.can_redo || !editable || busy === "step"}
+                  onClick={() => setAsk({ kind: "redo" })} title={undo.can_redo ? `Forward to w${undo.next_redo}` : "Nothing has been stepped back"}>
+                  <Icon name="redo" size={14} /> Redo{undo.redo_steps ? ` (${undo.redo_steps})` : ""}
+                </button>
+                <span className="muted small">
+                  {undo.can_undo || undo.can_redo
+                    ? `${undo.undo_steps} step(s) back, ${undo.redo_steps} forward. Each step keeps the state it leaves.`
+                    : "Undo and redo follow the checkpoints: every change the crew or you makes is recorded before it lands."}
+                </span>
+              </div>
+              <form className="row wrap cp-form" onSubmit={saveCheckpoint}>
+                <input value={cp.label} onChange={(e) => setCp({ ...cp, label: e.target.value })} maxLength={80}
+                  placeholder="Name this state" aria-label="Checkpoint name" />
+                <input value={cp.note} onChange={(e) => setCp({ ...cp, note: e.target.value })} maxLength={200}
+                  placeholder="What it is (optional)" aria-label="Checkpoint description" />
+                <button className="btn secondary small" type="submit"
+                  disabled={busy === "checkpoint" || !editable || (!cp.label.trim() && !cp.note.trim())}>
+                  <Icon name="bookmark" size={14} /> {busy === "checkpoint" ? "Keeping…" : "Checkpoint"}
+                </button>
+              </form>
+            </div>
+          )}
+
           {tab === "snapshots" && (snaps.snapshots.length ? (
             <>
               <p className="muted small">A snapshot holds the whole file set as it stood before a change, so restoring one
-                puts the page, its assets and its handoff note back together. The last {snaps.kept} are kept.</p>
+                puts the page, its assets and its handoff note back together. The last {snaps.kept} are kept; a checkpoint
+                you name is added to this list without changing a byte of the page.</p>
               <ul className="ws-list">
                 {snaps.snapshots.map((s) => (
-                  <li key={s.w} className="ws-item">
-                    <div className="row wrap between">
-                      <div className="ws-main">
-                        <div className="row wrap">
-                          <strong>w{s.w}</strong>
-                          <span className="pill">page v{s.html_version}</span>
-                          <span className="muted small">{fmtDate(s.at)}</span>
-                        </div>
-                        <p className="muted small">{s.note}</p>
-                        <div className="row wrap">
-                          {(s.changed || []).map((n) => <span key={n} className="pill mono">{n}</span>)}
-                        </div>
-                      </div>
-                      <div className="row wrap">
-                        <button className="btn ghost small" onClick={() => showSnapshot(s.w)} disabled={busy === `d${s.w}`}
-                          aria-expanded={open?.w === s.w}>
-                          <Icon name={open?.w === s.w ? "eyeOff" : "eye"} size={14} /> {open?.w === s.w ? "Hide" : "Files"}
-                        </button>
-                        <button className="btn ghost small" onClick={() => compare(s.w, 0)} disabled={busy === "diff"}>
-                          <Icon name="arrowRight" size={14} /> vs live
-                        </button>
-                        <button className="btn ghost small" disabled={!editable || busy === "restore"}
-                          onClick={() => restoreSnapshot(s.w)}>
-                          <Icon name="refresh" size={14} /> Restore
-                        </button>
-                      </div>
-                    </div>
-                    {open?.w === s.w && (busy === `d${s.w}`
-                      ? <div className="skeleton" style={{ height: 90 }} />
-                      : <SnapshotFiles files={open.detail.files} />)}
-                  </li>
+                  <SnapshotRow key={s.w} s={s} editable={editable} busy={busy}
+                    openFiles={open?.w === s.w ? open : null}
+                    onFiles={showSnapshot} onCompare={compare}
+                    onRestore={(w) => setAsk({ kind: "restore", w })} onRename={renameSnapshot} />
                 ))}
               </ul>
 
               {snaps.snapshots.length > 1 && (
                 <section className="card stack">
-                  <h2>Compare two snapshots</h2>
+                  <div className="row wrap between">
+                    <h2>Compare two snapshots</h2>
+                    <DiffModeToggle mode={mode} setMode={setMode} />
+                  </div>
                   <div className="row wrap diff-picks">
                     <label className="pick"><span className="muted small">Older</span>
                       <select value={pair.w} onChange={(e) => compare(Number(e.target.value), pair.to)} aria-label="Older snapshot">
                         <option value={0}>Choose…</option>
-                        {snaps.snapshots.map((s) => <option key={s.w} value={s.w}>w{s.w} — {s.note || "page v" + s.html_version}</option>)}
+                        {snaps.snapshots.map((s) => <option key={s.w} value={s.w}>w{s.w} — {s.label || s.note || "page v" + s.html_version}</option>)}
                       </select>
                     </label>
                     <Icon name="arrowRight" size={16} />
@@ -253,10 +346,11 @@ export default function VersionHistory() {
                     <>
                       <p className="diff-summary">
                         <span className="pill add">+{diff.added}</span><span className="pill del">-{diff.removed}</span>
-                        <span className="muted small">w{diff.from.w} ({diff.from.note || `page v${diff.from.html_version}`}) against {diff.to}.
-                          {diff.changed.length ? ` ${diff.changed.join(", ")} moved.` : " Nothing moved."}</span>
+                        <span className="muted small">w{diff.from.w} ({diff.from.label || diff.from.note || `page v${diff.from.html_version}`}) against {diff.to}.
+                          {diff.changed.length ? ` ${diff.changed.join(", ")} moved.` : " Nothing moved."}
+                          {mode === "side" ? " Unchanged stretches are folded; the two columns are the same pair of files." : ""}</span>
                       </p>
-                      <DiffBlock files={diff.files} />
+                      <FileDiffList files={diff.files} mode={mode} />
                     </>
                   )}
                 </section>
@@ -266,6 +360,7 @@ export default function VersionHistory() {
             text="A snapshot is taken the moment a change touches this run’s files — from the crew, a chat edit, an audit repair or a hand-written patch." />)}
         </>
       )}
+      {moving}
       {run && (
         <div className="row wrap">
           {run.state?.readiness?.total != null && <ScoreRing value={run.state.readiness.total} size={44} stroke={5} />}

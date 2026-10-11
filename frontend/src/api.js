@@ -79,7 +79,21 @@ export const api = {
   wsVersion: (id, w) => json(`/api/runs/${id}/workspace/versions/${w}`),
   wsVersionFile: async (id, w, name) => (await raw(`/api/runs/${id}/workspace/versions/${w}/files/${encodeURIComponent(name)}`)).text(),
   wsDiff: (id, w, to) => json(`/api/runs/${id}/workspace/diff?w=${w}${to ? `&to=${to}` : ""}`),
-  wsRestore: (id, w) => post(`/api/runs/${id}/workspace/restore`, { w }),
+  wsRestore: (id, w, baseVersion) => post(`/api/runs/${id}/workspace/restore`, { w, base_version: baseVersion }),
+  wsCheckpoint: (id, label, note) => post(`/api/runs/${id}/workspace/checkpoint`, { label, note }),
+  wsLabel: (id, w, label) => post(`/api/runs/${id}/workspace/versions/${w}/label`, { label }),
+  wsUndo: (id, baseVersion) => post(`/api/runs/${id}/workspace/undo`, { base_version: baseVersion }),
+  wsRedo: (id, baseVersion) => post(`/api/runs/${id}/workspace/redo`, { base_version: baseVersion }),
+  // preview lifecycle: read status, hand out one expiring sandboxed link, revoke every link again
+  previewStatus: (id) => json(`/api/runs/${id}/preview`),
+  previewStart: (id) => post(`/api/runs/${id}/preview`, {}),
+  previewStop: (id) => json(`/api/runs/${id}/preview`, { method: "DELETE" }),
+  // visual editor: map the element the preview frame reported, propose one patch for it, then decide
+  visualLocate: (id, element) => post(`/api/runs/${id}/visual/locate`, { element }),
+  visualPlan: (id, body) => post(`/api/runs/${id}/visual/plan`, body),
+  visualProposals: (id) => json(`/api/runs/${id}/visual/proposals`),
+  visualApply: (id, body) => post(`/api/runs/${id}/visual/apply`, body),
+  visualReject: (id, body) => post(`/api/runs/${id}/visual/reject`, body),
   // environment manager (metadata only: the server never sends a secret value)
   configStatus: () => json("/api/config/status"),
   envExample: () => json("/api/config/env-example"),

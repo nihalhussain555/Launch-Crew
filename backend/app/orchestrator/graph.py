@@ -198,6 +198,9 @@ class Orchestrator:
         s.html, s.sanitizer_violations = clean, violations
         s.html_version += 1
         s.note = f"Restored v{version}"
+        # A page rollback rewrites the workspace too, so it gets the same pre-change checkpoint.
+        await self._checkpoint_workspace(kind="version restore", agent="user", changed=None,
+                                         note=f"Before restoring v{version} (was v{s.html_version - 1})")
         files = await artifacts.publish(ctx)
         s.html_key = next(f["key"] for f in files if f["name"] == "index.html")
         await ctx.emit("workspace_updated", version=s.html_version,
@@ -212,15 +215,21 @@ class Orchestrator:
 
     # ------------------------------------------------------------- file-level edits (workspace API)
 
-    async def apply_workspace_changes(self, changes: list[dict], request: str = "") -> dict:
+    async def apply_workspace_changes(self, changes: list[dict], request: str = "",
+                                      *, kind: str = "file patch") -> dict:
         """Patch named files, then judge the result exactly like a generated build.
 
-        No model is called, so this spends no tokens. The workspace is indexed and the impact measured
-        first, every file is snapshotted before anything is overwritten, and the patched page goes
-        through the sanitizer, the Chromium checks and the readiness score afterwards - a hand-written
-        edit gets no free pass.
+        A model is called only by the caller that produced `changes`: this step itself spends no tokens,
+        and it is the same step whether the patch was typed by hand or clicked out of the preview. The
+        workspace is indexed and the impact measured first, every file is snapshotted before anything is
+        overwritten, and the patched page goes through the sanitizer, the Chromium checks and the
+        readiness score afterwards - a hand-written edit gets no free pass.
+
+        `kind` is the attribution the checkpoint carries, so history can tell a typed patch apart from a
+        visual edit without anyone re-reading the events.
         """
         ctx, s = self.ctx, self.ctx.state
+        label = "Visual edit" if kind == "visual edit" else "File-level change"
         await ctx.checkpoint("running")
         texts = await workspace_manager.load_texts(ctx)
         texts.setdefault("index.html", s.html)
@@ -236,10 +245,15 @@ class Orchestrator:
                                              status="applying")
         files_touched = sorted({c["file"] for c in validated} | {"index.html"})
         try:
-            snapshot = await workspace_manager.capture(ctx, note=f"Before change {plan['id']} (v{s.html_version})",
-                                                       changed=files_touched)
+            snapshot = await workspace_manager.capture(
+                ctx, note=f"Before change {plan['id']} (v{s.html_version})", changed=files_touched,
+                cause={"kind": kind, "plan": plan["id"], "run_id": ctx.run_id,
+                       "version": s.html_version, "agent": "user"})
+            workspace_manager.record_change(s, snapshot["w"])
+            await ctx.emit("checkpoint", w=snapshot["w"], kind=kind, agent="user",
+                           version=s.html_version, files=len(snapshot["files"]))
             result = await workspace_manager.commit(ctx, before=before, page=page,
-                                                    note=f"File-level change {plan['id']}: {ask[:120]}")
+                                                    note=f"{label} {plan['id']}: {ask[:120]}")
         except Exception as exc:  # noqa: BLE001 - the plan says what was attempted, then the failure stands
             plan["status"] = "rejected"
             plan["result"] = {"error": (getattr(exc, "message", None) or str(exc))[:300]}
@@ -248,7 +262,7 @@ class Orchestrator:
         s.revisions += 1
         s.changed_files = {k: result[k] for k in ("files", "changed", "lines_added", "lines_removed")}
         s.validation = {"at": artifacts.stamp(), "version": s.html_version, "status": "pending",
-                        "kind": "file patch", "workspace_version": snapshot["w"],
+                        "kind": kind, "workspace_version": snapshot["w"],
                         "measured_from": report["version"], "plan": plan["id"],
                         "changed": result["changed"], "lines_added": result["lines_added"],
                         "lines_removed": result["lines_removed"],
@@ -262,7 +276,7 @@ class Orchestrator:
                        files=[{"name": f["name"], "bytes": f["bytes"]} for f in s.files])
         s.chat.append({"role": "user", "text": ask, "at": artifacts.stamp(), "target": "files"})
         await ctx.emit("agent_message", agent="you",
-                       message=f"Workspace change #{s.revisions}: {ask}")
+                       message=f"{label} #{s.revisions}: {ask}")
 
         s.iteration = 0
         await self._run(self.critic)                   # re-measure the patched page, same rule as restore()
@@ -273,11 +287,16 @@ class Orchestrator:
                                "readiness": (s.readiness or {}).get("total")})
         s.chat.append({"role": "assistant", "at": artifacts.stamp(), "version": s.html_version,
                        "text": self._reply()})
-        await self._await_approval("File-level change applied. Review the diff, then approve to deploy.")
+        await self._await_approval(f"{label} applied. Review the diff, then approve to deploy.")
         return plan
 
-    async def restore_workspace_snapshot(self, w: int) -> None:
-        """Roll the whole workspace - page plus derived files - back to a captured snapshot."""
+    async def restore_workspace_snapshot(self, w: int, *, stepping: str | None = None) -> dict:
+        """Roll the whole workspace - page plus derived files - back to a captured snapshot.
+
+        `stepping` marks this as an undo or a redo rather than a user-picked restore: the state being
+        left is still snapshotted, but it goes onto the opposite stack so the move can be reversed.
+        A plain restore is a change like any other, so it becomes undoable and clears the redo chain.
+        """
         ctx, s = self.ctx, self.ctx.state
         await ctx.checkpoint("running")
         page = await workspace_manager.snapshot_page(ctx, w)
@@ -287,8 +306,16 @@ class Orchestrator:
         if not looks_like_html(clean):
             raise GuardrailError(f"Workspace snapshot w{w} is no longer a complete page; nothing was restored.")
 
-        snapshot = await workspace_manager.capture(ctx, note=f"Before restoring w{w}",
-                                                   changed=sorted(before))
+        snapshot = await workspace_manager.capture(
+            ctx, note=f"Before restoring w{w}", changed=sorted(before),
+            cause={"kind": "workspace restore", "run_id": ctx.run_id, "version": s.html_version,
+                   "agent": "user", "plan": f"w{w}"})
+        if stepping == "undo":
+            workspace_manager.record_step(s, snapshot["w"], forward=False)
+        elif stepping == "redo":
+            workspace_manager.record_step(s, snapshot["w"], forward=True)
+        else:
+            workspace_manager.record_change(s, snapshot["w"])
         s.html, s.sanitizer_violations = clean, violations
         s.html_version += 1
         s.note = f"Restored workspace w{w}"
@@ -299,27 +326,52 @@ class Orchestrator:
         s.changed_files = workspace_manager.stats(before, after)
         s.validation = {"at": artifacts.stamp(), "version": s.html_version, "status": "pending",
                         "kind": "workspace restore", "workspace_version": snapshot["w"],
-                        "restored_from": w, "changed": s.changed_files["changed"],
+                        "restored_from": w, "step": stepping or "restore",
+                        "changed": s.changed_files["changed"],
+                        "added": s.changed_files["added"],
+                        "removed": s.changed_files["removed"],
+                        "renamed": s.changed_files["renamed"],
                         "lines_added": s.changed_files["lines_added"],
                         "lines_removed": s.changed_files["lines_removed"],
                         "sanitizer_removed": len(violations)}
+        await ctx.emit("checkpoint", w=snapshot["w"], kind="workspace restore", agent="user",
+                       version=s.html_version, files=len(snapshot["files"]))
         await ctx.emit("workspace_updated", version=s.html_version,
                        files=[{"name": f["name"], "bytes": f["bytes"]} for f in files])
         s.iteration = 0
         await self._run(self.critic)
         await artifacts.annotate(ctx)
         await self._assess(rerun_panel=False)
+        label = {"undo": "Undid one change: back to", "redo": "Redid one change: forward to"}.get(
+            stepping or "", f"Restored workspace snapshot")
         s.chat.append({"role": "assistant", "at": artifacts.stamp(), "version": s.html_version,
-                       "text": f"Restored workspace snapshot w{w} as v{s.html_version}. "
-                               f"{self._reply()}"})
-        await self._await_approval(f"Workspace w{w} restored as v{s.html_version}.")
+                       "text": f"{label} w{w} as v{s.html_version}. {self._reply()}"})
+        await self._await_approval(f"{'Undone' if stepping == 'undo' else 'Redone' if stepping == 'redo' else 'Workspace restored'}"
+                                   f" - the workspace now matches w{w}, kept as v{s.html_version}.")
+        return {"w": w, "restored_as": s.html_version, "checkpoint": snapshot["w"],
+                **workspace_manager.undo_status(s)}
+
+    async def undo(self) -> dict:
+        """Step the workspace back to the checkpoint taken before the last change. No model, no tokens."""
+        return await self._step("undo")
+
+    async def redo(self) -> dict:
+        """Step forward again after an undo, using the checkpoint the undo itself kept."""
+        return await self._step("redo")
+
+    async def _step(self, side: str) -> dict:
+        """Read the pointer the timeline offers, then let the restore swap it as it captures."""
+        w = workspace_manager.next_step(self.ctx.state, side)
+        return await self.restore_workspace_snapshot(w, stepping=side)
 
     async def _apply_fixes(self, fixes: list[dict], note: str = "") -> None:
         """Route fixes to the owning agent, then always rebuild the page.
 
         The change is measured against the workspace index first (no model, no cost) so the Engineer
         sees which files a name actually lives in - and which are rebuilt from the page on every
-        publish - before it writes anything. What the rebuild really moved is measured again after it.
+        publish - before it writes anything. The whole file set is snapshotted at that point too, so
+        every rebuild the crew makes has a state to go back to. What the rebuild really moved is
+        measured again after it.
         """
         s = self.ctx.state
         s.note = note or s.note
@@ -327,6 +379,9 @@ class Orchestrator:
         by_agent: dict[str, list[str]] = defaultdict(list)
         for f in sorted(fixes, key=lambda f: f.get("priority", 1)):
             by_agent[f["agent"]].append(f["instruction"])
+        checkpoint = await self._checkpoint_workspace(
+            kind="crew rebuild", agent="+".join(sorted(by_agent)),
+            note=f"Before {note[:60] or 'crew change'} (v{s.html_version})", changed=sorted(before))
         s.pending_fixes = dict(by_agent)
         try:
             if "copywriter" in by_agent:
@@ -336,7 +391,32 @@ class Orchestrator:
             await self._run(self.engineer)
         finally:
             s.pending_fixes = {}
-        await self._measure_edit(before)
+        await self._measure_edit(before, checkpoint=checkpoint)
+
+    async def _checkpoint_workspace(self, *, kind: str, note: str, agent: str = "",
+                                    plan: str = "", changed: list[str] | None = None) -> dict | None:
+        """Snapshot the file set about to be overwritten, and make it the step back.
+
+        Returns None when there is nothing to snapshot yet (the first build has published no files) or
+        when storage refused: a checkpoint is what makes an edit reversible, never a gate on it.
+        """
+        ctx, s = self.ctx, self.ctx.state
+        if not s.files:
+            return None
+        try:
+            snap = await workspace_manager.capture(
+                ctx, note=note, changed=changed,
+                cause={"kind": kind, "agent": agent, "plan": plan, "run_id": ctx.run_id,
+                       "version": s.html_version})
+        except Exception as exc:  # noqa: BLE001 - the edit goes ahead; the gap is reported, not hidden
+            await ctx.emit("agent_message", agent="system",
+                           message=f"No checkpoint taken before this {kind}: {str(exc)[:160]}. "
+                                   f"It cannot be undone by workspace version.")
+            return None
+        workspace_manager.record_change(s, snap["w"])
+        await ctx.emit("checkpoint", w=snap["w"], kind=kind, agent=agent or "crew",
+                       version=s.html_version, files=len(snap["files"]))
+        return snap
 
     async def _impact_for(self, request: str) -> dict[str, str]:
         """Impact report for a change about to be made, plus the file texts to diff it against.
@@ -359,7 +439,7 @@ class Orchestrator:
         s.impact = change_impact.analyze(index, request, version=s.html_version)
         return texts
 
-    async def _measure_edit(self, before: dict[str, str]) -> None:
+    async def _measure_edit(self, before: dict[str, str], checkpoint: dict | None = None) -> None:
         """Compare the workspace the rebuild published against the one it replaced."""
         ctx, s = self.ctx, self.ctx.state
         if not before:
@@ -372,14 +452,20 @@ class Orchestrator:
         s.changed_files = workspace_manager.stats(before, after)
         s.validation = {"at": artifacts.stamp(), "version": s.html_version, "status": "pending",
                         "kind": "crew rebuild", "measured_from": (s.impact or {}).get("version"),
+                        "workspace_version": (checkpoint or {}).get("w"),
+                        "restored_from": None,
                         "changed": s.changed_files["changed"],
+                        "added": s.changed_files["added"],
+                        "removed": s.changed_files["removed"],
+                        "renamed": s.changed_files["renamed"],
                         "lines_added": s.changed_files["lines_added"],
                         "lines_removed": s.changed_files["lines_removed"],
                         "sanitizer_removed": len(s.sanitizer_violations)}
         await ctx.emit("agent_message", agent="system",
                        message=f"Impact: {change_impact.headline(s.impact or {})} "
                                f"Rebuild moved {s.changed_files['lines_added']} line(s) over "
-                               f"{len(s.changed_files['changed'])} file(s).")
+                               f"{len(s.changed_files['changed'])} file(s)."
+                               + (f" Undo returns the workspace to w{checkpoint['w']}." if checkpoint else ""))
 
     async def audit(self, kinds: list[str]) -> None:
         """On-demand audits: measure the live page, record the reports, return to the gate.

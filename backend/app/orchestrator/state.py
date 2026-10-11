@@ -42,8 +42,14 @@ class RunState(BaseModel):
     note: str = ""                                        # what the next snapshot should be labelled with
 
     # File-level editing (app/services/workspace_manager.py): whole-file-set snapshots and change plans.
-    workspace_versions: list[dict] = Field(default_factory=list)  # [{w, at, note, html_version, files, changed}]
+    workspace_versions: list[dict] = Field(default_factory=list)  # [{w, at, note, label, cause, html_version, files, changed}]
     change_plans: list[dict] = Field(default_factory=list)        # [{id, at, request, status, changes, impact, result}]
+    # Proposals from the visual editor (app/services/visual_edit.py): one selected element, one patch,
+    # waiting to be reviewed. [{id, at, status, instruction, element, source, patch, plan, version, result}]
+    visual_edits: list[dict] = Field(default_factory=list)
+    # The undo/redo timeline, as snapshot numbers: each entry is a whole file set a step would restore.
+    undo_stack: list[int] = Field(default_factory=list)
+    redo_stack: list[int] = Field(default_factory=list)
     impact: dict | None = None                            # the last impact report measured before editing
     changed_files: dict | None = None                     # per-file line movement of the last applied change
     validation: dict | None = None                        # how the last change fared after the checks re-ran

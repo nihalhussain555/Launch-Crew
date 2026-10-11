@@ -45,7 +45,9 @@ def test_overview_reports_the_workspace_without_leaking_storage_keys(built):
     assert data["version"] == 1 and data["status"] == "awaiting_approval" and data["snapshots"] == []
     assert [f["name"] for f in data["files"]] == ["index.html", "styles.css", "app.js", "README.md"]
     assert data["limits"]["ops"] == ["replace", "replace_all", "append", "set"]
-    assert data["limits"]["keep_snapshots"] == 10 and data["latest_snapshot"] == 0
+    assert data["limits"]["keep_snapshots"] == 20 and data["latest_snapshot"] == 0
+    assert data["undo"] == {"can_undo": False, "can_redo": False, "undo_steps": 0, "redo_steps": 0,
+                            "next_undo": None, "next_redo": None}
     assert "key" not in body.text                                  # storage keys are server-side only
     assert data["impact"] is None and data["changed_files"] is None and data["validation"] is None
 
@@ -251,6 +253,9 @@ def test_the_plan_and_snapshot_records_survive_a_later_ai_revision(built):
 
     s = state(client, h, rid)
     assert [p["status"] for p in s["change_plans"]] == ["proposed", "applied"]
-    assert len(s["workspace_versions"]) == 1                     # an AI rebuild re-publishes; only patches capture
+    # Both kinds of change checkpoint: the hand-written patch and the crew rebuild that followed it.
+    assert len(s["workspace_versions"]) == 2
+    assert [v["cause"]["kind"] for v in s["workspace_versions"]] == ["file patch", "crew rebuild"]
+    assert s["undo_stack"] == [v["w"] for v in s["workspace_versions"]]
     assert s["impact"]["version"] == 2                           # the revision measured the patched build
     assert s["validation"]["kind"] == "crew rebuild" and s["validation"]["version"] == s["html_version"] == 3

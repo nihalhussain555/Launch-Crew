@@ -173,6 +173,11 @@ textarea{resize:vertical}.search-input{max-width:420px}
 .ico{width:24px;text-align:center;display:grid;place-items:center;color:var(--muted)}.spin{display:inline-block;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .frame-wrap{background:var(--surface-2);border-radius:10px;padding:8px;overflow:auto;display:flex;justify-content:center}
 .frame{border:1px solid var(--border);border-radius:8px;background:#fff;height:620px}.frame.desktop{width:100%}.frame.mobile{width:375px;max-width:100%}
+.frame.tablet{width:768px;max-width:100%}
+.console-list{list-style:none;margin:0;padding:10px;display:flex;flex-direction:column;gap:6px;max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
+.console-line{display:flex;gap:10px;align-items:baseline;font:12.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.console-line.error{color:var(--err)}.console-line.warn{color:var(--warn)}.console-line.ok{color:var(--muted)}
+.console-when{color:var(--muted);flex:0 0 auto;min-width:92px}
 .checks{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px}
 .checks li{display:flex;gap:8px;padding:8px 10px;border-radius:10px;border:1px solid var(--border)}
 .checks li.ok>span{color:var(--ok)}.checks li.err>span{color:var(--err)}.checks li.warn>span{color:var(--warn)}
@@ -222,6 +227,18 @@ textarea{resize:vertical}.search-input{max-width:420px}
 .diff-line.del{background:color-mix(in srgb,var(--err) 14%,transparent)}
 .diff-line.hunk{color:var(--primary);background:color-mix(in srgb,var(--primary) 8%,transparent);font-weight:700}
 .diff-mark{flex:none;width:12px;color:var(--muted);user-select:none}
+.diff-side .diff-pair{display:grid;grid-template-columns:34px minmax(220px,1fr) 34px minmax(220px,1fr);gap:8px;align-items:start;padding:1px 10px;min-width:520px}
+.diff-side .diff-no{text-align:right;color:var(--muted);opacity:.75;user-select:none;font-variant-numeric:tabular-nums}
+.diff-side .diff-cell{white-space:pre-wrap;word-break:break-word;min-width:0;padding:0 3px;border-radius:4px}
+.diff-side .diff-cell.bad{background:color-mix(in srgb,var(--err) 14%,transparent)}
+.diff-side .diff-cell.good{background:color-mix(in srgb,var(--ok) 14%,transparent)}
+.diff-side .diff-cell.right{border-left:1px solid var(--border)}
+.diff-gap{padding:3px 12px;color:var(--muted);font-size:11.5px;border-top:1px dashed var(--border);border-bottom:1px dashed var(--border)}
+.vc-bar{align-items:center;justify-content:space-between}
+.cp-form{align-items:center;flex:1;min-width:280px;justify-content:flex-end}
+.cp-form input{max-width:220px}
+.rename input{max-width:280px}
+@media (max-width:720px){.vc-bar{align-items:flex-start}.cp-form{justify-content:flex-start}.cp-form input{flex:1;max-width:none}}
 .chat-log{display:flex;flex-direction:column;gap:8px;max-height:320px;overflow:auto;padding:4px 2px}
 .chat-msg{max-width:86%;padding:9px 12px;border-radius:12px;border:1px solid var(--border);background:var(--surface-2)}
 .chat-msg p{margin:4px 0 0;white-space:pre-wrap}
@@ -591,3 +608,27 @@ textarea{resize:vertical}.search-input{max-width:420px}
 @keyframes ringSpin{from{transform:rotateY(var(--yaw)) rotateX(var(--tilt)) rotateZ(0)}to{transform:rotateY(var(--yaw)) rotateX(var(--tilt)) rotateZ(360deg)}}
 @keyframes logoFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
 @media (max-width:1080px){.auth-3d{min-height:168px}}
+
+/* ===== visual AI editor: the preview and its side panel, together in the Code Workspace ===== */
+.ve-grid{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:16px;align-items:start}
+.ve-panel{gap:14px;position:sticky;top:14px;max-height:calc(100vh - 28px);overflow:auto}
+.ve-sel,.ve-map,.ve-refusal,.ve-plan{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
+.ve-refusal{border-left:3px solid var(--warn)}
+.ve-plan{background:var(--surface);border-left:3px solid var(--primary)}
+.ve-snip{margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+.ve-refs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.ve-refs li{display:flex;flex-direction:column;gap:2px}
+.ve-panel h4{margin:2px 0 0;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.ve-patch{margin:0;display:grid;grid-template-columns:92px minmax(0,1fr);gap:4px 10px;font-size:13px}
+.ve-patch dt{font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.ve-patch dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.ve-hints .pill{cursor:pointer;background:var(--surface);border-style:dashed;white-space:normal;overflow-wrap:anywhere;text-align:left;justify-content:flex-start;font-family:inherit}
+.ve-hints .pill:hover{border-color:var(--primary);color:var(--primary)}
+.ve-history{border-top:1px solid var(--border);padding-top:10px}
+.ve-attrs .pill{white-space:normal;overflow-wrap:anywhere;max-width:100%;text-align:left;justify-content:flex-start}
+.ve-panel .diff{max-height:38vh}
+.ve-panel .empty-state{padding:24px 12px}
+@media (max-width:1240px){
+.ve-grid{grid-template-columns:1fr}
+.ve-panel{position:static;max-height:none;overflow:visible}
+}
