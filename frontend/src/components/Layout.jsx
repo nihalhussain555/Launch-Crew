@@ -13,6 +13,7 @@ import ProductTour from "./ProductTour";
 const NAV_GROUPS = [
   { label: "AI development", items: [
     { to: "/dashboard", label: "AI Agent Studio", icon: "cpu" },
+    { to: "/new", label: "New project brief", icon: "plus" },
     { to: "/projects", label: "Projects", icon: "folder" },
     { to: "/workflows", label: "Agent Workflows", icon: "workflow" },
     { to: "/chat", label: "AI Chat", icon: "chat" },
@@ -20,6 +21,7 @@ const NAV_GROUPS = [
   ] },
   { label: "Build & ship", items: [
     { to: "/workspace", label: "Code Workspace", icon: "code" },
+    { to: "/design", label: "Design System", icon: "palette" },
     { to: "/versions", label: "Version History", icon: "layers" },
     { to: "/quality", label: "Security & Quality", icon: "shield" },
     { to: "/deployments", label: "Deployments", icon: "rocket" },

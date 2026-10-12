@@ -19,6 +19,7 @@ export default function CommandPalette({ open, onClose }) {
   const items = useMemo(() => {
     const base = [
       { id: "dash", label: "Go to AI Agent Studio", icon: "cpu", run: () => nav("/dashboard") },
+      { id: "new", label: "Start a new project brief", icon: "plus", run: () => nav("/new") },
       { id: "projects", label: "Go to Projects", icon: "folder", run: () => nav("/projects") },
       { id: "workflows", label: "Open Agent Workflows", icon: "workflow", run: () => nav("/workflows") },
       { id: "chat", label: "Open AI Chat", icon: "chat", run: () => nav("/chat") },
@@ -29,6 +30,7 @@ export default function CommandPalette({ open, onClose }) {
       { id: "integrations", label: "Open Integrations", icon: "key", run: () => nav("/integrations") },
       { id: "analytics", label: "Open Analytics & Usage", icon: "chart", run: () => nav("/analytics") },
       { id: "templates", label: "Browse idea templates", icon: "sparkle", run: () => nav("/templates") },
+      { id: "design", label: "Open Design System and themes", icon: "palette", run: () => nav("/design") },
       { id: "settings", label: "Open Settings", icon: "gear", run: () => nav("/settings") },
       { id: "profile", label: "Open your profile", icon: "user", run: () => nav("/profile") },
     ];

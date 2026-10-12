@@ -9,10 +9,12 @@ import ChatStudio from "./pages/ChatStudio";
 import CodeWorkspace from "./pages/CodeWorkspace";
 import Dashboard from "./pages/Dashboard";
 import Deployments from "./pages/Deployments";
+import DesignSystem from "./pages/DesignSystem";
 import Home from "./pages/Home";
 import Integrations from "./pages/Integrations";
 import Legal from "./pages/Legal";
 import Login from "./pages/Login";
+import NewProject from "./pages/NewProject";
 import Profile from "./pages/Profile";
 import ProjectDetail from "./pages/ProjectDetail";
 import Projects from "./pages/Projects";
@@ -53,6 +55,7 @@ export default function App() {
       {/* authenticated product */}
       <Route element={<Protected><Layout /></Protected>}>
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/new" element={<NewProject />} />
         <Route path="/projects" element={<Projects />} />
         <Route path="/projects/:projectId" element={<ProjectDetail />} />
         <Route path="/workflows" element={<Workflows />} />
@@ -65,6 +68,7 @@ export default function App() {
         <Route path="/analytics" element={<Analytics />} />
         <Route path="/templates" element={<Templates />} />
         <Route path="/templates/:slug" element={<TemplateDetail />} />
+        <Route path="/design" element={<DesignSystem />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/runs/:runId" element={<RunDetail />} />

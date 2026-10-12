@@ -494,6 +494,10 @@ _SKIP_RULES = {(".skip-link", "position"): "absolute", (".skip-link", "left"): "
                (".skip-link:focus", "color"): "var(--on-primary)",
                (".skip-link:focus", "padding"): "12px 18px", (".skip-link:focus", "min-height"): "44px",
                (".skip-link:focus", "border-radius"): "8px"}
+# The feature containers the twelve styles can emit. "Make the features one column" is about the grid
+# itself, so the override has to reach every layout the builder uses, not only the four that existed
+# before the style system.
+_FEATURE_GRID = ".fgrid,.fcheck,.fbento,.ftiles,.fprod,.fduo"
 
 
 def _attr(tag: str, name: str) -> str:
@@ -728,9 +732,9 @@ def _page_rules(fix: str) -> dict:
            "remove the graphic"):
         out[(".hero-art", "display")] = "none"
     if _has(low, "one column", "single column", "stack the feature", "full width card"):
-        out[(".fgrid", "grid-template-columns")] = "minmax(0,1fr)"
+        out[(_FEATURE_GRID, "grid-template-columns")] = "minmax(0,1fr)"
     elif _has(low, "two column", "2 column", "side by side"):
-        out[(".fgrid", "grid-template-columns")] = "repeat(2,minmax(0,1fr))"
+        out[(_FEATURE_GRID, "grid-template-columns")] = "repeat(2,minmax(0,1fr))"
     stack = _font_stack(low)
     if stack:
         if _has(low, "heading", "headline", "title", "h1", "h2"):

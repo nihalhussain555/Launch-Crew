@@ -1,8 +1,13 @@
 import os
 
 # Must be set before app modules read settings.
+# NETLIFY_AUTH_TOKEN is blanked deliberately: approving a run deploys it, and with a real token in .env every
+# test that reaches the gate creates a live site on that account and leaves it there. Empty token -> deploy.py's
+# own simulated branch, which is also what a fresh install without a token does. test_deploy_bundle.py covers
+# both branches explicitly and builds its own Settings, so it is unaffected.
 os.environ.update({"MOCK_LLM": "true", "MONGO_URI": "mock://", "JWT_SECRET": "test-secret",
-                   "STORAGE_DIR": "/tmp/launchcrew-test-artifacts", "LLM_BACKOFF_BASE_S": "0.01"})
+                   "STORAGE_DIR": "/tmp/launchcrew-test-artifacts", "LLM_BACKOFF_BASE_S": "0.01",
+                   "NETLIFY_AUTH_TOKEN": ""})
 
 import pytest
 
@@ -36,14 +41,15 @@ def make_settings(**kw) -> Settings:
 
 @pytest.fixture
 def make_ctx(tmp_path):
-    def _make(idea="A habit tracker for night-shift workers", **settings_kw):
+    def _make(idea="A habit tracker for night-shift workers", spec=None, **settings_kw):
         events: list[tuple[str, dict]] = []
 
         async def sink(t, d):
             events.append((t, d))
 
         s = make_settings(storage_dir=str(tmp_path), **settings_kw)
-        ctx = RunContext(run_id="run1", settings=s, llm=LLMClient(s), state=RunState(idea=idea),
+        ctx = RunContext(run_id="run1", settings=s, llm=LLMClient(s),
+                         state=RunState(idea=idea, spec=spec or {}),
                          sink=sink, storage=LocalStorage(str(tmp_path)))
         return ctx, events
     return _make

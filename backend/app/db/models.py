@@ -6,6 +6,8 @@ from bson import ObjectId
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
+from app.agents.schemas import SiteSpec
+
 
 class UserCreate(BaseModel):
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
@@ -33,6 +35,31 @@ class TokenOut(BaseModel):
 class ProjectCreate(BaseModel):
     idea: str = Field(min_length=5, max_length=500)
     name: str = Field(default="", max_length=120)
+    # What the creation wizard collected. Defaults keep a plain {idea} post working exactly as before.
+    spec: SiteSpec = SiteSpec()
+
+
+class RunIn(BaseModel):
+    """Per-run overrides for a project's brief: pick a different style, or ask for another section.
+
+    Used by "compare variations", which starts one run per style so the same idea can be judged
+    side by side. An unknown style is rejected by SiteSpec's validator, not substituted.
+    """
+    style: str = Field(default="", max_length=32)
+    sections: list[str] = Field(default_factory=list)
+
+    def merged_with(self, spec: dict) -> dict:
+        base = dict(spec or {})
+        if self.style:
+            base["style"] = self.style
+        if self.sections:
+            base["sections"] = list(dict.fromkeys(self.sections))
+        return base
+
+
+class CompareIn(BaseModel):
+    """Styles to build side by side. Bounded at four: each one is a full run, with full costs."""
+    styles: list[str] = Field(min_length=1, max_length=4)
 
 
 class ProjectOut(BaseModel):
@@ -40,6 +67,7 @@ class ProjectOut(BaseModel):
     name: str
     idea: str
     created_at: datetime
+    spec: dict[str, Any] = {}
     runs: list[dict[str, Any]] = []
 
 
@@ -52,6 +80,7 @@ class RunOut(BaseModel):
     tokens_used: int = 0
     steps: int = 0
     state: dict[str, Any] = {}
+    spec: dict[str, Any] = {}
     share_token: str | None = None
     created_at: datetime
     updated_at: datetime | None = None
@@ -154,7 +183,8 @@ def user_out(doc: dict) -> UserOut:
 
 def project_out(doc: dict, runs: list[dict] | None = None) -> ProjectOut:
     return ProjectOut(
-        id=str(doc["_id"]), name=doc["name"], idea=doc["idea"], created_at=_utc(doc["created_at"]), runs=runs or []
+        id=str(doc["_id"]), name=doc["name"], idea=doc["idea"], created_at=_utc(doc["created_at"]),
+        spec=doc.get("spec") or {}, runs=runs or []
     )
 
 
@@ -168,6 +198,7 @@ def run_out(doc: dict) -> RunOut:
         tokens_used=doc.get("tokens_used", 0),
         steps=doc.get("steps", 0),
         state=doc.get("state", {}),
+        spec=doc.get("spec", {}),
         share_token=doc.get("share_token"),
         created_at=_utc(doc["created_at"]),
         updated_at=_utc(doc.get("updated_at")),
@@ -175,11 +206,17 @@ def run_out(doc: dict) -> RunOut:
 
 
 def run_summary(doc: dict) -> dict:
+    state = doc.get("state") or {}
+    style = state.get("style") or {}
     return {
         "id": str(doc["_id"]),
         "status": doc["status"],
         "created_at": _utc(doc["created_at"]).isoformat(),
         "tokens_used": doc.get("tokens_used", 0),
         "idea": doc.get("idea", ""),
-        "score": ((doc.get("state") or {}).get("readiness") or {}).get("total"),
+        "score": (state.get("readiness") or {}).get("total"),
+        # Which style this run was built in, so a comparison of runs says what differs between them.
+        "style_key": style.get("style_key") or style.get("theme_key") or "",
+        "style_label": style.get("label", ""),
+        "version": state.get("html_version", 0),
     }

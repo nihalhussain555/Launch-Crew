@@ -10,13 +10,15 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException
 
 
-async def check_run_quota(db, user_id, limit: int, window_s: int = 3600) -> None:
+async def check_run_quota(db, user_id, limit: int, window_s: int = 3600, needed: int = 1) -> None:
+    """Raise 429 unless `needed` more runs still fit in the window (1 for a single start)."""
     since = datetime.now(timezone.utc) - timedelta(seconds=window_s)
     count = await db.runs.count_documents({"user_id": str(user_id), "created_at": {"$gte": since}})
-    if count >= limit:
+    if count + needed > limit:
         raise HTTPException(
             429,
-            f"Run limit reached ({limit} per hour). Try again later.",
+            f"Run limit reached ({limit} per hour)" + (f"; this needs {needed} run(s)" if needed > 1 else "")
+            + ". Try again later.",
             headers={"Retry-After": str(window_s)},
         )
 

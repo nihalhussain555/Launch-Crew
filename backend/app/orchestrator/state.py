@@ -23,11 +23,14 @@ class StepLimitExceeded(GuardrailError):
 class RunState(BaseModel):
     """Everything agents share. Persisted to Mongo (except `html`, which lives in the storage layer)."""
     idea: str
+    # What the creation wizard collected (app/agents/schemas.SiteSpec): business type, audience, pages,
+    # preferred style and colour, desired features. Empty for runs created before the wizard existed.
+    spec: dict = Field(default_factory=dict)
     brief: MarketBrief | None = None
     strategy: Strategy | None = None
     content: CopyDoc | None = None
     design: Design | None = None
-    # This run's design direction (app/agents/variants): hero shape, section order, motif, palette.
+    # This run's design direction (app/agents/variants): hero shape, nav, section order, motif, palette.
     style: dict = Field(default_factory=dict)
 
     html: str | None = None
@@ -37,6 +40,11 @@ class RunState(BaseModel):
 
     # Workspace: every build is published as a file set plus a restorable snapshot (app/tools/splitter).
     files: list[dict] = Field(default_factory=list)       # [{name, language, key, bytes, note}]
+    # Source a feature build wrote for the user to run themselves (app/services/feature_build.py): the
+    # page stays canonical for preview, share and deploy, and these extra files ride along with it -
+    # re-attached on every publish so a crew rebuild never deletes someone's server code, and snapshotted
+    # with the rest of the file set so a workspace restore puts them back as they were.
+    authored_files: list[dict] = Field(default_factory=list)   # [{name, language, key, bytes, note, source}]
     versions: list[dict] = Field(default_factory=list)    # [{v, key, bytes, at, note, errors, readiness}]
     chat: list[dict] = Field(default_factory=list)        # [{role, text, at, target, version}]
     note: str = ""                                        # what the next snapshot should be labelled with
@@ -47,6 +55,14 @@ class RunState(BaseModel):
     # Proposals from the visual editor (app/services/visual_edit.py): one selected element, one patch,
     # waiting to be reviewed. [{id, at, status, instruction, element, source, patch, plan, version, result}]
     visual_edits: list[dict] = Field(default_factory=list)
+    # Proposals from the theme customizer (app/services/theme_edit.py): one token patch for the whole
+    # page, waiting to be reviewed. [{id, at, status, theme, summary, changes, reaches, plan, version, result}]
+    theme_edits: list[dict] = Field(default_factory=list)
+    # Proposals from a plain-English feature request (app/services/feature_build.py): the page block that
+    # adds the panels, plus the source files that ride with it. [{id, at, status, keys, features, files,
+    # changes, summary, warnings, plan, version, result}] - the record is the report, so it says what each
+    # surface of each capability actually reached.
+    feature_edits: list[dict] = Field(default_factory=list)
     # The undo/redo timeline, as snapshot numbers: each entry is a whole file set a step would restore.
     undo_stack: list[int] = Field(default_factory=list)
     redo_stack: list[int] = Field(default_factory=list)

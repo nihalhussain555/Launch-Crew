@@ -254,6 +254,22 @@ const PATHS = {
       <path d="M12 5v14" />
     </>
   ),
+  sliders: (
+    <>
+      <path d="M4 8h9M17.5 8H20M4 16h4M12.5 16H20" />
+      <circle cx="15.2" cy="8" r="2.1" />
+      <circle cx="10.2" cy="16" r="2.1" />
+    </>
+  ),
+  palette: (
+    <>
+      <path d="M12 3.6a8.4 8.4 0 0 0 0 16.8c1.2 0 2-.8 2-1.8 0-.5.2-.9.5-1.2.3-.3.8-.5 1.3-.5h1.4A3.2 3.2 0 0 0 20.4 13c0-4.6-3.8-9.4-8.4-9.4z" />
+      <circle cx="8.1" cy="10.2" r="1" fill="currentColor" />
+      <circle cx="11.4" cy="7.4" r="1" fill="currentColor" />
+      <circle cx="15.4" cy="8.9" r="1" fill="currentColor" />
+      <circle cx="7.4" cy="14.1" r="1" fill="currentColor" />
+    </>
+  ),
 };
 
 export default function Icon({ name, size, strokeWidth, className = "" }) {

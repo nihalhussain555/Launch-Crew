@@ -117,7 +117,7 @@ class Orchestrator:
     async def run_until_approval(self) -> None:
         ctx = self.ctx
         if not ctx.state.style:  # one design direction per run, reused by every later revision
-            ctx.state.style = variants.seed_state(ctx.run_id or ctx.state.idea)
+            ctx.state.style = variants.seed_state(ctx.run_id or ctx.state.idea, ctx.state.spec)
         await ctx.checkpoint("running")
         ctx.state.note = "Initial build"
         for agent in (ResearcherAgent(), StrategistAgent(), self.copywriter, self.designer, self.engineer):
@@ -216,7 +216,7 @@ class Orchestrator:
     # ------------------------------------------------------------- file-level edits (workspace API)
 
     async def apply_workspace_changes(self, changes: list[dict], request: str = "",
-                                      *, kind: str = "file patch") -> dict:
+                                      *, kind: str = "file patch", authored: list[dict] | None = None) -> dict:
         """Patch named files, then judge the result exactly like a generated build.
 
         A model is called only by the caller that produced `changes`: this step itself spends no tokens,
@@ -227,9 +227,16 @@ class Orchestrator:
 
         `kind` is the attribution the checkpoint carries, so history can tell a typed patch apart from a
         visual edit without anyone re-reading the events.
+
+        `authored` is the extra source a feature build ships beside the page (server code, schema,
+        `.env.example`, setup notes). It is stored, listed and snapshotted with the rest of the file set,
+        but it is never executed here and never folded into the page - and if the page change is refused,
+        the file set is rolled back to what it was, because a half-written feature would be the one thing
+        this pipeline must not report as done.
         """
         ctx, s = self.ctx, self.ctx.state
-        label = "Visual edit" if kind == "visual edit" else "File-level change"
+        label = {"visual edit": "Visual edit", "theme edit": "Theme edit",
+                 "feature build": "Feature build"}.get(kind, "File-level change")
         await ctx.checkpoint("running")
         texts = await workspace_manager.load_texts(ctx)
         texts.setdefault("index.html", s.html)
@@ -243,7 +250,10 @@ class Orchestrator:
         before, _, page = await workspace_manager.prepare_changes(ctx, validated)
         plan = workspace_manager.record_plan(ctx, request=ask, changes=validated, report=report,
                                              status="applying")
-        files_touched = sorted({c["file"] for c in validated} | {"index.html"})
+        staged = await workspace_manager.stage_authored(ctx, authored) if authored else []
+        files_touched = sorted({c["file"] for c in validated} | {"index.html"}
+                               | {e["name"] for e in staged})
+        previous_authored = list(s.authored_files or [])
         try:
             snapshot = await workspace_manager.capture(
                 ctx, note=f"Before change {plan['id']} (v{s.html_version})", changed=files_touched,
@@ -252,8 +262,13 @@ class Orchestrator:
             workspace_manager.record_change(s, snapshot["w"])
             await ctx.emit("checkpoint", w=snapshot["w"], kind=kind, agent="user",
                            version=s.html_version, files=len(snapshot["files"]))
-            result = await workspace_manager.commit(ctx, before=before, page=page,
-                                                    note=f"{label} {plan['id']}: {ask[:120]}")
+            written = workspace_manager.register_authored(s, staged) if staged else []
+            try:
+                result = await workspace_manager.commit(ctx, before=before, page=page,
+                                                        note=f"{label} {plan['id']}: {ask[:120]}")
+            except Exception:
+                s.authored_files = previous_authored
+                raise
         except Exception as exc:  # noqa: BLE001 - the plan says what was attempted, then the failure stands
             plan["status"] = "rejected"
             plan["result"] = {"error": (getattr(exc, "message", None) or str(exc))[:300]}
@@ -266,11 +281,12 @@ class Orchestrator:
                         "measured_from": report["version"], "plan": plan["id"],
                         "changed": result["changed"], "lines_added": result["lines_added"],
                         "lines_removed": result["lines_removed"],
+                        "authored": written,
                         "sanitizer_removed": result["sanitizer_removed"]}
         plan["status"] = "applied"
         plan["result"] = {"version": s.html_version, "workspace_version": snapshot["w"],
                           "changed": result["changed"], "lines_added": result["lines_added"],
-                          "lines_removed": result["lines_removed"],
+                          "lines_removed": result["lines_removed"], "authored": written,
                           "sanitizer_removed": result["sanitizer_removed"]}
         await ctx.emit("workspace_updated", version=s.html_version,
                        files=[{"name": f["name"], "bytes": f["bytes"]} for f in s.files])
@@ -299,6 +315,7 @@ class Orchestrator:
         """
         ctx, s = self.ctx, self.ctx.state
         await ctx.checkpoint("running")
+        target = workspace_manager.find_snapshot(s.workspace_versions, w)
         page = await workspace_manager.snapshot_page(ctx, w)
         before = await workspace_manager.load_texts(ctx)
         before.setdefault("index.html", s.html)
@@ -316,9 +333,13 @@ class Orchestrator:
             workspace_manager.record_step(s, snapshot["w"], forward=True)
         else:
             workspace_manager.record_change(s, snapshot["w"])
+        self._sync_design(target)
         s.html, s.sanitizer_violations = clean, violations
         s.html_version += 1
         s.note = f"Restored workspace w{w}"
+        # Feature source is not derivable from the page, so it comes back from the snapshot itself before
+        # publish re-lists the file set.
+        await workspace_manager.restore_authored(ctx, w)
         files = await artifacts.publish(ctx)
         s.html_key = next(f["key"] for f in files if f["name"] == "index.html")
         after = await workspace_manager.load_texts(ctx)
@@ -350,6 +371,37 @@ class Orchestrator:
                                    f" - the workspace now matches w{w}, kept as v{s.html_version}.")
         return {"w": w, "restored_as": s.html_version, "checkpoint": snapshot["w"],
                 **workspace_manager.undo_status(s)}
+
+    def _sync_design(self, target: dict) -> None:
+        """Move the run's design with the file set a restore just put back.
+
+        A theme edit is the one workspace change that also rewrites the run's own direction and brief, so
+        undoing it has to take those back too - otherwise the next rebuild would draw the theme the user
+        just removed onto a page they had un-themed. A redo restores the themed design instead. The
+        snapshot being restored carries the cause of the change it precedes; a redo's target is the
+        checkpoint an undo left behind, which names the snapshot before it, so that is followed once.
+        """
+        s = self.ctx.state
+        cause = target.get("cause") or {}
+        entry = self._theme_step(cause)
+        if entry is None:
+            return
+        design = entry.get("design_after" if cause.get("kind") != "theme edit" else "design_before") or {}
+        if design.get("style"):
+            s.style = dict(design["style"])
+        if "spec_theme" in design:
+            s.spec = {**(s.spec or {}), "theme": design["spec_theme"]}
+
+    def _theme_step(self, cause: dict, *, depth: int = 0) -> dict | None:
+        """The theme proposal a step is reversing, when the change it steps over was a theme edit."""
+        if cause.get("kind") == "theme edit":
+            return next((e for e in self.ctx.state.theme_edits or [] if e.get("plan") == cause.get("plan")), None)
+        if depth or cause.get("kind") != "workspace restore":
+            return None
+        number = str(cause.get("plan") or "").lstrip("w")
+        previous = next((v for v in self.ctx.state.workspace_versions or []
+                        if str(v.get("w")) == number), None)
+        return self._theme_step((previous or {}).get("cause") or {}, depth=1) if previous else None
 
     async def undo(self) -> dict:
         """Step the workspace back to the checkpoint taken before the last change. No model, no tokens."""

@@ -27,17 +27,25 @@ export default function Dashboard() {
   const [err, setErr] = useState("");
   useEffect(() => { api.stats().then(setStats).catch((e) => setErr(e.message)); }, []);
   const first = (user?.name || user?.email || "").split(/[ @]/)[0];
+  // Feature work is counted out of each run's own record, so a run only appears here if it carries a
+  // request, an undecided proposal or an applied build - and none of those words means "live".
+  const featureRuns = (stats?.recent_runs || []).filter((r) => r.feature_asked || r.feature_open || r.feature_built);
 
   return (
     <>
       <div className="page-head">
         <div><h1>Welcome back{first ? `, ${first}` : ""}</h1><p className="muted">Turn an idea into a tested, launch-ready page.</p></div>
+        <Link to="/new" className="btn primary"><Icon name="sliders" size={15} /> New project brief</Link>
       </div>
 
       <section className="card hero-card" data-tour="idea">
         <h2>What are we launching?</h2>
         <IdeaForm onSubmit={start} busy={busy} />
-        <p className="muted small">Not sure what to build? <Link to="/templates">Browse idea templates <Icon name="arrowRight" size={14} /></Link></p>
+        <p className="muted small">
+          This quick start leaves the site type, style and sections to the crew. To choose them yourself:{" "}
+          <Link to="/new">write a full brief</Link> or{" "}
+          <Link to="/templates">browse idea templates <Icon name="arrowRight" size={14} /></Link>
+        </p>
       </section>
 
       {err && <div className="error" role="alert">{err}</div>}
@@ -54,6 +62,38 @@ export default function Dashboard() {
           </>
         )}
       </div>
+
+      {!!featureRuns.length && (
+        <section className="card stack" aria-label="Feature work across your runs">
+          <div className="row between wrap">
+            <h2>Feature work</h2>
+            <span className="muted small">Counted from each run’s own record, never assumed</span>
+          </div>
+          <div className="list">
+            {featureRuns.map((r) => (
+              <div key={r.id} className="plan-item">
+                <div className="row wrap between">
+                  <strong>{r.idea}</strong>
+                  <StatusPill status={r.status} />
+                </div>
+                <div className="row wrap">
+                  {!!r.feature_asked && <span className="pill">{r.feature_asked} asked in the brief</span>}
+                  {!!r.feature_open && <span className="pill warn">{r.feature_open} awaiting your decision</span>}
+                  {!!r.feature_built && <span className="pill ok">{r.feature_built} applied build(s)</span>}
+                  <Link className="btn ghost small" to={`/workspace?run=${r.id}`}>
+                    <Icon name="code" size={14} /> Feature studio
+                  </Link>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="muted small">A count is not a claim that anything works. “Asked” means the brief recorded a
+            request and no build has been reviewed yet; “applied” means a measured patch went through the workspace
+            pipeline, and a later crew revision can still have redrawn the page without those panels. The studio
+            reads the page itself and says which of its features are live, which need your server started, and
+            which need a key you have not set.</p>
+        </section>
+      )}
 
       <section>
         <div className="row between"><h2>Recent runs</h2><Link to="/projects">All projects <Icon name="arrowRight" size={14} /></Link></div>

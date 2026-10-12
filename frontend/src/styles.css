@@ -95,6 +95,9 @@ kbd{font:12px ui-monospace,Menlo,monospace;background:var(--surface-2);border:1p
 .template-card{text-align:left;align-items:flex-start}.template-card:hover{border-color:var(--primary);transform:translateY(-2px)}
 .template-card{transition:transform .15s,border-color .15s}
 .tpl-top{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%}
+/* the real brief a template card carries (site type, style, sections) - read-only, not a control */
+.tpl-brief{display:flex;flex-direction:column;gap:8px;width:100%;padding:10px 11px;border:1px dashed var(--border);border-radius:12px;background:color-mix(in srgb,var(--primary) 6%,transparent)}
+.tpl-brief .chip{cursor:default}
 /* settings + profile: one aligned row system (key left, value right, hairline dividers) */
 .set-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:18px;align-items:start}
 .set-card{gap:12px}
@@ -618,6 +621,9 @@ textarea{resize:vertical}.search-input{max-width:420px}
 .ve-snip{margin:0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
 .ve-refs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
 .ve-refs li{display:flex;flex-direction:column;gap:2px}
+/* One capability in the feature panel: its own state, its surfaces, and what is still the owner's to do. */
+.fp-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
+.fp-item{display:flex;flex-direction:column;gap:6px;padding:10px;border:1px solid var(--border);border-radius:10px}
 .ve-panel h4{margin:2px 0 0;font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .ve-patch{margin:0;display:grid;grid-template-columns:92px minmax(0,1fr);gap:4px 10px;font-size:13px}
 .ve-patch dt{font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
@@ -632,3 +638,113 @@ textarea{resize:vertical}.search-input{max-width:420px}
 .ve-grid{grid-template-columns:1fr}
 .ve-panel{position:static;max-height:none;overflow:visible}
 }
+
+/* ===== creation wizard: the brief behind ProjectDetail's "New project" ===== */
+.wiz-steps{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
+.wiz-steps li{flex:1 1 150px;min-width:0}
+.wiz-step{display:flex;align-items:center;gap:9px;width:100%;font:inherit;text-align:left;cursor:pointer;
+  padding:9px 12px;border-radius:12px;border:1px solid var(--border);background:var(--surface);color:var(--muted)}
+.wiz-step:hover:not(:disabled){border-color:var(--primary);color:var(--text)}
+.wiz-step:disabled{cursor:not-allowed;opacity:.55}
+.wiz-step .num{flex:none;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-size:12px;font-weight:700;
+  background:var(--surface-2);color:var(--muted)}
+.wiz-step.on{border-color:var(--primary);color:var(--text);background:color-mix(in srgb,var(--primary) 9%,var(--surface))}
+.wiz-step.on .num{background:var(--primary);color:var(--on-primary)}
+.wiz-step.done{color:var(--text)}
+.wiz-step.done .num{background:color-mix(in srgb,var(--ok) 18%,var(--surface));color:var(--ok)}
+.wiz-body{gap:16px}
+.wiz-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.wiz-head h2{margin:0;font-size:20px;letter-spacing:-.01em}
+.wiz-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  border-top:1px solid var(--border);padding-top:14px}
+.tag-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tag-form input{flex:1 1 220px;min-width:0}
+.tag-list{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tag-list li{display:flex;align-items:center;gap:2px}
+.tag-drop{width:28px;height:28px;min-height:28px}
+.style-grid,.biz-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.style-card,.biz-card{text-align:left;align-items:flex-start;cursor:pointer;font:inherit;color:inherit;gap:8px}
+.style-card:hover,.biz-card:hover{border-color:var(--primary);transform:translateY(-2px)}
+.style-card,.biz-card{transition:transform .15s,border-color .15s}
+.style-card.on,.biz-card.on{border-color:var(--primary);background:color-mix(in srgb,var(--primary) 7%,var(--surface))}
+.biz-card.on{box-shadow:inset 3px 0 0 var(--primary)}
+.style-card strong{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sw-row{display:flex;gap:4px}
+.sw{width:20px;height:20px;border-radius:6px;border:1px solid var(--border);display:inline-block;flex:none}
+.btn .sw{width:16px;height:16px}
+.style-flag{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--primary)}
+.style-secs{display:flex;flex-direction:column;gap:4px}
+.review .set-row{grid-template-columns:minmax(0,150px) minmax(0,1fr)}
+.review .set-val{font-weight:600;overflow-wrap:anywhere}
+@media (max-width:620px){
+.wiz-steps li{flex:1 1 100%}
+.style-grid,.biz-grid{grid-template-columns:1fr}
+.review .set-row{grid-template-columns:1fr;gap:4px}
+}
+@media (prefers-reduced-motion:reduce){.style-card:hover,.biz-card:hover{transform:none}}
+
+/* ===== design system: the theme customizer, its live preview and the saved library ===== */
+.ds-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:16px;align-items:start}
+.ds-name,.ds-style-pick{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:600;color:var(--muted)}
+.ds-name input,.ds-style-pick select{font:inherit;min-height:40px}
+.ds-actions{border-top:1px solid var(--border);padding-top:14px}
+.ds-summary{overflow-wrap:anywhere}
+.ds-controls>section{padding:14px 0;border-top:1px solid var(--border)}
+.ds-controls>section:first-child{border-top:0;padding-top:0}
+.ds-controls h3{margin:0;font-size:15px;letter-spacing:-.01em}
+.ds-colors{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px}
+.ds-color{display:flex;align-items:center;gap:7px;padding:7px 9px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)}
+.ds-color-key{flex:1 1 84px;min-width:0;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.ds-color input[type=color]{flex:none;width:34px;height:30px;padding:0;border:1px solid var(--border);border-radius:8px;background:none;cursor:pointer}
+.ds-color input[type=color]:disabled{cursor:not-allowed;opacity:.55}
+.ds-color input.mono{flex:0 1 96px;min-width:0;font-size:12.5px;text-transform:uppercase;min-height:30px;padding:4px 7px}
+.ds-color .btn{min-height:28px;padding:3px 8px}
+.ds-derived{align-items:center;gap:6px}
+.ds-derived .sw{width:15px;height:15px;border-radius:5px}
+.ds-type{margin:0;display:flex;flex-direction:column;gap:2px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
+.ds-type-h{font-size:21px;font-weight:700;letter-spacing:-.01em}
+.ds-type-b{font-size:14px;color:var(--muted)}
+.ds-scale{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--muted)}
+.ds-scale input[type=range]{flex:1 1 180px;min-width:0;accent-color:var(--primary)}
+.ds-group{display:flex;flex-direction:column;gap:6px}
+.ds-contrast{padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
+.ds-contrast h3{margin:0;font-size:14px}
+.ds-contrast-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+.ds-contrast-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;align-items:center;gap:10px;
+  padding:6px 0;border-top:1px solid var(--border);font-size:13px}
+.ds-contrast-row:first-child{border-top:0}
+.ds-contrast-row .set-key{text-transform:capitalize}
+.ds-contrast-row .sw-row{gap:3px}
+.ds-notes{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--warn)}
+.ds-notes li{display:flex;align-items:flex-start;gap:6px;overflow-wrap:anywhere}
+.ds-tokens{border-top:1px solid var(--border);padding-top:10px}
+.ds-tokens summary{cursor:pointer}
+.ds-token-list{list-style:none;margin:10px 0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:3px 14px}
+.ds-token-list li{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:3px 0;border-bottom:1px dashed var(--border);overflow-wrap:anywhere}
+.ds-lib .ws-item{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;background:var(--surface)}
+.ds-lib .ws-main{flex:1 1 320px}
+.ds-lib .sw-row{margin:2px 0}
+@media (max-width:1180px){.ds-grid{grid-template-columns:1fr}}
+@media (max-width:620px){
+.ds-contrast-row{grid-template-columns:1fr auto;gap:4px 10px}
+.ds-color input.mono{flex:1 1 80px}
+}
+/* theme studio: the run-side panel's saved-theme loader, inside the Code Workspace grid */
+.ts-pick{align-items:flex-end}
+.ts-pick select{min-width:200px}
+/* the plain-English ask: words in, the controls they moved out, refusals stated as refusals */
+.ts-ask{padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
+.ts-ask h3{margin:0;font-size:15px;letter-spacing:-.01em}
+.ts-ask-bar input{flex:1 1 260px;min-width:0;font:inherit;min-height:40px;padding:8px 10px;
+  border:1px solid var(--border);border-radius:10px;background:var(--bg);color:var(--text)}
+.ts-ask-out{padding-top:10px;border-top:1px solid var(--border)}
+.ts-maps{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;font-size:12.5px}
+.ts-maps li{display:flex;flex-direction:column;gap:2px;overflow-wrap:anywhere}
+.ts-ask-lex{border-top:1px solid var(--border);padding-top:10px}
+.ts-ask-lex summary{cursor:pointer;font-size:13px;font-weight:600;color:var(--muted)}
+.ts-ask-lex .pill{cursor:pointer;background:var(--bg);border-style:dashed;font-family:inherit}
+.ts-ask-lex .pill:hover{border-color:var(--primary);color:var(--primary)}
+.ts-ask .ts-maps{margin-top:8px}
+/* the visual editor's pointer to it: one element here, the whole site over there */
+.ve-wholesite{border-top:1px solid var(--border);padding-top:10px}

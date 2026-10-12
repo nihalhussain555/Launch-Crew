@@ -34,15 +34,20 @@ MAX_NAME_CHARS = 64
 MAX_LABEL_CHARS = 80
 KEEP_WORKSPACE_VERSIONS = 20      # fallback when the settings field is absent
 MAX_UNDO_STEPS = 50               # undo/redo pointers held per run; the snapshots themselves are pruned
-ALLOWED_EXTENSIONS = {"html", "htm", "css", "js", "mjs", "md", "py", "json", "txt"}
+ALLOWED_EXTENSIONS = {"html", "htm", "css", "js", "mjs", "md", "py", "json", "txt", "sql"}
 OPS = ("replace", "replace_all", "append", "set")
 
 # The kinds of change that get a checkpoint, so history says who moved the workspace and why.
 CAUSE_KINDS = ("crew rebuild", "file patch", "workspace restore", "version restore", "manual checkpoint",
-               "visual edit", "unattributed")
+               "visual edit", "theme edit", "feature build", "unattributed")
 
 # Files the crew rewrites itself: patching them here would be undone by the next build.
 GENERATED_ONLY = {"README.md"}
+# The page plus the three files published from it. An authored file (app/services/feature_build.py) may
+# not take one of these names, and a patch may not be aimed at one expecting it to be stored back.
+DERIVED_NAMES = ("index.html", "styles.css", "app.js", "README.md")
+MAX_AUTHORED_PER_BUILD = 12
+AUTHORED_NOTE = "Written by a feature build - see FEATURES.md for what it needs to run."
 # A name with any of these is not a workspace file, whatever the caller meant.
 UNSAFE = re.compile(r"[/\\]|\.\.|^\.|^~|\s")
 
@@ -80,6 +85,11 @@ def known_file(state, name: str) -> dict:
                              f"({', '.join(f.get('name', '') for f in state.files or []) or 'no files yet'})", 404)
     if name in GENERATED_ONLY:
         raise WorkspaceError(f"{name} is rewritten by the crew on every build; patch the page instead")
+    if any(f.get("name") == name for f in (state.authored_files or [])):
+        raise WorkspaceError(f"{name} is feature source a build wrote, not part of the page: this patch "
+                             f"would be measured against the file and then dropped, because only the page "
+                             f"is published. Ask for the feature again with what should change, and the new "
+                             f"version of the file is written whole.")
     return entry
 
 
@@ -213,6 +223,96 @@ async def index_workspace(ctx, *, version: int | None = None) -> dict:
     if ctx.state.html and "index.html" not in texts:
         texts["index.html"] = ctx.state.html
     return index_texts(texts, version=version if version is not None else ctx.state.html_version)
+
+
+# ------------------------------------------------------------------ authored feature source
+def validate_authored(files: list[dict]) -> list[dict]:
+    """Normalise the source a feature build hands over, and refuse what it may not overwrite.
+
+    These files ship as source for the user to run elsewhere; nothing in this backend executes or imports
+    them. A name the page owns cannot be taken by one, because the preview, share link and deploy all read
+    the page's own files - a clash would be a claim about what is live that the build cannot keep.
+    """
+    if not files:
+        raise WorkspaceError("No files to write")
+    if len(files) > MAX_AUTHORED_PER_BUILD:
+        raise WorkspaceError(f"Too many files in one build (max {MAX_AUTHORED_PER_BUILD})")
+    seen: set[str] = set()
+    out: list[dict] = []
+    for raw in files:
+        if not isinstance(raw, dict):
+            raise WorkspaceError("Each authored file must be an object")
+        name = validate_name(raw.get("name") or raw.get("file") or "")
+        if name in DERIVED_NAMES:
+            raise WorkspaceError(f"{name} is rebuilt from the page on every publish; change the page instead")
+        if name in seen:
+            raise WorkspaceError(f"{name} appears twice; one version of a file can be written")
+        text = str(raw.get("text") or "")
+        if len(text.encode("utf-8", "ignore")) < 8:
+            raise WorkspaceError(f"{name}: refusing to write an empty or stub file")
+        if len(text.encode("utf-8", "ignore")) > MAX_WORKSPACE_FILE_BYTES:
+            raise WorkspaceError(f"{name} is larger than the {MAX_WORKSPACE_FILE_BYTES} bytes a "
+                                 f"workspace file may hold and stay indexable")
+        seen.add(name)
+        out.append({"name": name, "text": text, "language": codebase_index.language_of(name),
+                    "note": (raw.get("note") or AUTHORED_NOTE)[:160],
+                    "source": (raw.get("source") or "feature")[:40]})
+    return out
+
+
+async def stage_authored(ctx, files: list[dict]) -> list[dict]:
+    """Store the bytes and return workspace entries; nothing is listed until `register_authored`.
+
+    The blobs are written before the page is patched on purpose: if the page change is refused afterwards
+    these bytes simply sit unreferenced, which has never failed a build, whereas a file entry pointing at
+    bytes that were never written would be a lie in the workspace listing.
+    """
+    entries = []
+    for item in validate_authored(files):
+        data = item["text"].encode("utf-8", "ignore")
+        key = await ctx.storage.save(ctx.run_id, item["name"], data)
+        entries.append({"name": item["name"], "language": item["language"], "key": key, "bytes": len(data),
+                        "note": item["note"], "source": item["source"]})
+    return entries
+
+
+def register_authored(state, entries: list[dict]) -> list[str]:
+    """Add staged files to the run's authored set, replacing any earlier version of the same name."""
+    names = {e["name"] for e in entries}
+    state.authored_files = [f for f in (state.authored_files or []) if f.get("name") not in names] + list(entries)
+    listed = {f.get("name") for f in (state.files or [])}
+    state.files = list(state.files or []) + [dict(e) for e in entries if e.get("name") not in listed]
+    return sorted(names)
+
+
+async def restore_authored(ctx, w: int) -> list[str]:
+    """Roll the feature source back exactly as that snapshot held it, including files it did not have yet.
+
+    `publish` recreates the page's own three derived files from `index.html`, so restoring the page is
+    enough for them. Server source a feature build wrote is not derivable from the page: without this a
+    restore would put the page back and leave those files at whatever version they were written at, so the
+    pair would no longer describe one build.
+    """
+    entry = snapshot_of(ctx, w)
+    s = ctx.state
+    known = {f["name"]: f for f in (s.authored_files or []) if f.get("name")}
+    restored: list[dict] = []
+    for recorded in entry["files"]:
+        name = recorded.get("name") or ""
+        if not name or name in DERIVED_NAMES:
+            continue
+        try:
+            data = await ctx.storage.load(recorded["key"])
+        except Exception as exc:  # noqa: BLE001 - a pruned blob is reported, never guessed at
+            raise WorkspaceError(f"{name} could not be read from snapshot w{w}: {exc}", 404) from exc
+        meta = known.get(name) or {}
+        key = await ctx.storage.save(ctx.run_id, name, data)
+        restored.append({"name": name, "language": meta.get("language") or codebase_index.language_of(name),
+                         "key": key, "bytes": len(data),
+                         "note": meta.get("note") or AUTHORED_NOTE,
+                         "source": meta.get("source") or f"restored from w{w}"})
+    s.authored_files = restored
+    return sorted(r["name"] for r in restored)
 
 
 def stats(before: dict[str, str], after: dict[str, str]) -> dict:

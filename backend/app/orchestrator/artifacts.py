@@ -33,6 +33,12 @@ async def publish(ctx, note: str = "") -> list[dict]:
                       "note": a.note, "key": await storage.save(ctx.run_id, a.name, a.text.encode("utf-8"))})
     files.append({"name": readme.name, "language": readme.language, "bytes": len(readme.text.encode()),
                   "note": readme.note, "key": await storage.save(ctx.run_id, readme.name, readme.text.encode("utf-8"))})
+    # Source a feature build wrote is not derived from the page, so this build cannot recreate it: carry the
+    # recorded entry forward instead of dropping it. A page file always wins a name clash, because that one
+    # is what the preview, share link and deploy actually read.
+    for entry in s.authored_files or []:
+        if entry.get("name") and entry.get("key") and entry["name"] not in {f["name"] for f in files}:
+            files.append(dict(entry))
     s.files = files
 
     key = await storage.save(ctx.run_id, f"history/v{s.html_version}.html", s.html.encode("utf-8"))

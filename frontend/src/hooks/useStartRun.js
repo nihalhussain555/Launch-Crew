@@ -3,15 +3,15 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { useToast } from "../toast";
 
-/** idea -> project -> run -> navigate to the live run page. */
+/** idea (+ the wizard's brief spec) -> project -> run -> navigate to the live run page. */
 export function useStartRun() {
   const nav = useNavigate();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
-  const start = useCallback(async (idea) => {
+  const start = useCallback(async (idea, spec = {}) => {
     setBusy(true);
     try {
-      const p = await api.createProject(idea);
+      const p = await api.createProject(idea, spec);
       const run = await api.createRun(p.id);
       nav(`/runs/${run.id}`);
       return true;

@@ -46,7 +46,7 @@ const tone = (s) => (s === "error" ? "err" : s === "warning" ? "warn" : "");
 
 /** Ask for a change to the element the preview frame reported, review the patch, then apply or reject it. */
 export default function VisualEditor({ runId, version, element, picking, onPick, onClear,
-                                      setRun, refresh, reload, working, editable, undo }) {
+                                      setRun, refresh, reload, working, editable, undo, onThemeRequest }) {
   const toast = useToast();
   const [map, setMap] = useState(null);
   const [mapBusy, setMapBusy] = useState(false);
@@ -254,6 +254,24 @@ export default function VisualEditor({ runId, version, element, picking, onPick,
             </button>
             {working && <p className="muted small">The crew is rebuilding this page — select again once it settles.</p>}
           </form>
+
+          {onThemeRequest && (
+            <section className="ve-wholesite stack">
+              <p className="muted small">This panel edits the one selected element. A sentence about the look of the
+                whole site belongs in the Theme studio, which changes the page's design tokens once instead of patching
+                every element — it will say which words it understood and refuse the ones it cannot honour.</p>
+              <div className="row wrap">
+                <button type="button" className="btn ghost small" disabled={!instruction.trim()}
+                  onClick={() => onThemeRequest(instruction.trim())}>
+                  <Icon name="palette" size={14} /> Send this to the Theme studio
+                </button>
+                <button type="button" className="btn ghost small" disabled={!onThemeRequest}
+                  onClick={() => onThemeRequest("")}>
+                  <Icon name="sliders" size={14} /> Open Theme studio
+                </button>
+              </div>
+            </section>
+          )}
 
           {plan && (
             <section className="ve-plan stack">

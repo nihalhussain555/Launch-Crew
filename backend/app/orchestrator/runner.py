@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from pymongo import ReturnDocument
 
+from app.agents import variants
 from app.config import Settings
 from app.orchestrator.graph import Orchestrator
 from app.orchestrator.state import GuardrailError, RunContext, RunState
-from app.services import visual_edit
+from app.services import feature_build, theme_edit, visual_edit, workspace_manager
 from app.utils.logger import get_logger
 
 log = get_logger("runner")
@@ -50,7 +51,8 @@ async def run_pipeline(app_state, run_id: str) -> None:
     """Idea -> research -> ... -> critic loop -> awaiting_approval."""
     db, settings = app_state.db, app_state.settings
     doc = await db.runs.find_one({"_id": ObjectId(run_id)})
-    ctx = RunContext(run_id=run_id, settings=settings, llm=app_state.llm, state=RunState(idea=doc["idea"]),
+    state = RunState(idea=doc["idea"], spec=doc.get("spec") or {})
+    ctx = RunContext(run_id=run_id, settings=settings, llm=app_state.llm, state=state,
                      sink=DBEventSink(db, run_id), storage=app_state.storage,
                      checkpoint=lambda c, st: _checkpoint(db, c, st))
     try:
@@ -179,6 +181,92 @@ async def visual_apply_pipeline(app_state, run_id: str, changes: list[dict], req
         except Exception:  # noqa: BLE001 - the proposal is a record, never a reason to lose the page
             log.warning("visual proposal %s on run %s could not be marked", proposal_id, run_id)
         await _keep_last_good(app_state, run_id, ctx, exc, "Visual edit")
+
+
+async def theme_apply_pipeline(app_state, run_id: str, proposal_id: str) -> None:
+    """Apply a reviewed token patch, then make the run's own design say it too (POST /theme/apply).
+
+    The page and the brief are two halves of the same promise: patching the `:root` block restyles what
+    is live now, and writing the theme onto the run's direction and spec is what keeps the next revision
+    or rebuild from quietly drawing the old skin back. Both happen here, after the workspace pipeline has
+    proved the patch survives the sanitizer and the Chromium checks - a failed theme edit leaves the
+    direction alone, because the page it belongs to was not changed either.
+    """
+    ctx = await ctx_for(app_state, run_id)
+    try:
+        entry = theme_edit.find_proposal(ctx.state, proposal_id)
+        before = {"style": dict(ctx.state.style), "spec_theme": (ctx.state.spec or {}).get("theme") or {}}
+        plan = await Orchestrator(ctx).apply_workspace_changes(entry["changes"],
+                                                               entry.get("request") or entry["summary"],
+                                                               kind="theme edit")
+        direction = variants.retheme(variants.from_dict(ctx.state.style), entry["theme"],
+                                     color=(ctx.state.spec or {}).get("color", ""))
+        ctx.state.style = variants.as_dict(direction)
+        ctx.state.spec = {**(ctx.state.spec or {}), "theme": entry["theme"]}
+        entry["plan"] = plan["id"]
+        # Both designs are recorded so an undo or a redo can put the run's own direction back the way it
+        # was: the page in the snapshot and the design in the state have to move together.
+        entry["design_before"] = before
+        entry["design_after"] = {"style": dict(ctx.state.style), "spec_theme": entry["theme"]}
+        theme_edit.mark_proposal(entry, "applied", **plan["result"])
+        await ctx.emit("agent_message", agent="system",
+                       message=f"Theme applied as v{ctx.state.html_version}: {entry['summary']}. "
+                               f"{plan['result'].get('lines_added', 0)} lines up, "
+                               f"{plan['result'].get('lines_removed', 0)} down.")
+        await ctx.checkpoint()
+    except Exception as exc:  # noqa: BLE001
+        try:
+            entry = theme_edit.find_proposal(ctx.state, proposal_id)
+            theme_edit.mark_proposal(entry, "rejected",
+                                     error=(getattr(exc, "message", None) or str(exc))[:300])
+            await ctx.checkpoint()
+        except Exception:  # noqa: BLE001 - the proposal is a record, never a reason to lose the page
+            log.warning("theme proposal %s on run %s could not be marked", proposal_id, run_id)
+        await _keep_last_good(app_state, run_id, ctx, exc, "Theme edit")
+
+
+async def feature_apply_pipeline(app_state, run_id: str, proposal_id: str) -> None:
+    """Apply a reviewed feature build: the page block, plus the source files that ship with it.
+
+    Writing is the workspace pipeline's job, so a feature build gets the same pre-change snapshot, the
+    same sanitizer and Chromium checks over the patched page, and the same readiness score after it. What
+    is specific to features is the second half of the change - `server.py`, `schema.sql`, `SETUP.md` and
+    the rest are handed over as authored source, and the orchestrator already rolls them back if the page
+    patch is refused, because a half-written feature is the one thing this path must not report as done.
+
+    The message that follows says what each capability actually reached. A build whose checkout still
+    needs a payment account says so, in the catalog's own words, instead of printing "store added".
+    """
+    ctx = await ctx_for(app_state, run_id)
+    try:
+        entry = feature_build.find_proposal(ctx.state, proposal_id)
+        texts = await workspace_manager.load_texts(ctx)
+        texts.setdefault("index.html", ctx.state.html)
+        feature_build.recheck(entry, texts)
+        authored = feature_build.authored_for(entry)
+        plan = await Orchestrator(ctx).apply_workspace_changes(entry["changes"],
+                                                               entry.get("request") or entry["summary"],
+                                                               kind="feature build", authored=authored)
+        entry["plan"] = plan["id"]
+        feature_build.mark_proposal(entry, "applied", **plan["result"])
+        await ctx.checkpoint()
+        waiting = [row["label"] for row in entry.get("features") or []
+                   if row.get("status") != "generated"]
+        await ctx.emit("agent_message", agent="system",
+                       message=f"Feature build applied as v{ctx.state.html_version}: {entry['summary']} "
+                               f"Written beside the page: {', '.join(item['name'] for item in authored)}. "
+                               + (f"Still needing something from you: {', '.join(waiting)} - the steps are "
+                                  f"in SETUP.md." if waiting else
+                                  "Everything in it works in the published page as it stands."))
+    except Exception as exc:  # noqa: BLE001
+        try:
+            entry = feature_build.find_proposal(ctx.state, proposal_id)
+            feature_build.mark_proposal(entry, "rejected",
+                                         error=(getattr(exc, "message", None) or str(exc))[:300])
+            await ctx.checkpoint()
+        except Exception:  # noqa: BLE001 - the proposal is a record, never a reason to lose the page
+            log.warning("feature proposal %s on run %s could not be marked", proposal_id, run_id)
+        await _keep_last_good(app_state, run_id, ctx, exc, "Feature build")
 
 
 async def workspace_restore_pipeline(app_state, run_id: str, w: int) -> None:

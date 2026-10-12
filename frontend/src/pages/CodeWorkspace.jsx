@@ -4,10 +4,12 @@ import { api } from "../api";
 import { DiffBody, DiffModeToggle } from "../components/DiffView";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
+import FeaturesPanel from "../components/FeaturesPanel";
 import Icon from "../components/Icon";
 import LivePreview from "../components/LivePreview";
 import RunPicker, { useRunPick } from "../components/RunPicker";
 import Tabs from "../components/Tabs";
+import ThemeStudio from "../components/ThemeStudio";
 import VisualEditor from "../components/VisualEditor";
 import { useRun } from "../hooks/useRun";
 import { useToast } from "../toast";
@@ -60,13 +62,14 @@ export default function CodeWorkspace() {
   const [shown, setShown] = useState(null);
   const [sel, setSel] = useState(null);          // the element the preview frame reported
   const [picking, setPicking] = useState(false); // the frame is armed for one click
+  const [themeAsk, setThemeAsk] = useState("");  // a whole-site sentence handed from the visual editor
 
   const version = run?.state?.html_version || 0;
   // A published page that moved is a page whose selections no longer describe anything real.
   useEffect(() => { setSel(null); setPicking(false); }, [runId, version]);
 
   useEffect(() => {
-    setData(null); setDataErr(""); setIndex(null); setPlan(null); setShown(null); setReport(null);
+    setData(null); setDataErr(""); setIndex(null); setPlan(null); setShown(null); setReport(null); setThemeAsk("");
     if (!runId) return undefined;
     let live = true;
     api.wsOverview(runId).then((d) => {
@@ -139,6 +142,8 @@ export default function CodeWorkspace() {
 
   const tabs = useMemo(() => [
     { id: "preview", label: "Live preview" },
+    { id: "theme", label: "Theme studio" },
+    { id: "features", label: "Feature studio" },
     { id: "files", label: "Files", badge: data?.files?.length || null },
     { id: "index", label: "Index", badge: index?.counts?.symbols || null },
     { id: "impact", label: "Impact analysis" },
@@ -186,7 +191,26 @@ export default function CodeWorkspace() {
               <VisualEditor runId={runId} version={version} element={sel} picking={picking}
                 onPick={() => setPicking(true)} onClear={() => setSel(null)}
                 setRun={setRun} refresh={refresh} reload={reload}
-                working={working} editable={editable} undo={data.undo} />
+                working={working} editable={editable} undo={data.undo}
+                onThemeRequest={(text) => { setThemeAsk(text); setTab("theme"); }} />
+            </div>
+          )}
+
+          {tab === "theme" && (
+            <div className="ve-grid">
+              <LivePreview runId={runId} version={version} working={working} />
+              <ThemeStudio runId={runId} version={version} setRun={setRun} refresh={refresh} reload={reload}
+                working={working} editable={editable} undo={data.undo}
+                externalAsk={themeAsk} onAskConsumed={() => setThemeAsk("")} />
+            </div>
+          )}
+
+          {tab === "features" && (
+            <div className="ve-grid">
+              <LivePreview runId={runId} version={version} working={working} />
+              <FeaturesPanel runId={runId} version={version} setRun={setRun} refresh={refresh} reload={reload}
+                working={working} editable={editable} undo={data.undo}
+                requestedKeys={run?.spec?.feature_keys || run?.state?.spec?.feature_keys || []} />
             </div>
           )}
 

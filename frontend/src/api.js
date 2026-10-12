@@ -33,6 +33,7 @@ async function raw(path, opts = {}) {
 }
 const json = async (path, opts) => (await raw(path, opts)).json();
 const post = (path, body) => json(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+const patch = (path, body) => json(path, { method: "PATCH", body: JSON.stringify(body) });
 const del = async (path) => { await raw(path, { method: "DELETE" }); };
 
 export const api = {
@@ -41,10 +42,10 @@ export const api = {
   me: () => json("/api/auth/me"),
   stats: () => json("/api/stats"),
   listProjects: () => json("/api/projects"),
-  createProject: (idea) => post("/api/projects", { idea }),
+  createProject: (idea, spec = {}, name = "") => post("/api/projects", { idea, name, spec }),
   getProject: (id) => json(`/api/projects/${id}`),
   deleteProject: (id) => del(`/api/projects/${id}`),
-  createRun: (projectId) => post(`/api/projects/${projectId}/runs`),
+  createRun: (projectId, body) => post(`/api/projects/${projectId}/runs`, body),
   getRun: (id) => json(`/api/runs/${id}`),
   approve: (id) => post(`/api/runs/${id}/approve`),
   revise: (id, instruction, target) => post(`/api/runs/${id}/revise`, { instruction, target }),
@@ -54,6 +55,11 @@ export const api = {
   unshare: (id) => del(`/api/runs/${id}/share`),
   feedback: (id) => json(`/api/runs/${id}/feedback`),
   applyFeedback: (id, ids, target) => post(`/api/runs/${id}/feedback/apply`, { ids, target }),
+  // design registry: the styles and business types the creation wizard offers, straight from the backend
+  styles: () => json("/api/styles"),
+  styleDetail: (key) => json(`/api/styles/${encodeURIComponent(key)}`),
+  resolveBrief: (spec) => post("/api/styles/resolve", spec),
+  compareStyles: (projectId, styles) => post(`/api/projects/${projectId}/compare`, { styles }),
   // workspace: generated files, version history, diffs and AI actions
   files: (id) => json(`/api/runs/${id}/files`),
   fileText: async (id, name) => (await raw(`/api/runs/${id}/files/${encodeURIComponent(name)}`)).text(),
@@ -94,6 +100,32 @@ export const api = {
   visualProposals: (id) => json(`/api/runs/${id}/visual/proposals`),
   visualApply: (id, body) => post(`/api/runs/${id}/visual/apply`, body),
   visualReject: (id, body) => post(`/api/runs/${id}/visual/reject`, body),
+  // design system: the customizer's own data source and the user's saved theme library
+  themeRegistry: () => json("/api/themes/registry"),
+  themePreviewPage: (theme, style) => post("/api/themes/preview-page", { theme, style: style || "" }),
+  listThemes: () => json("/api/themes"),
+  saveTheme: (name, theme) => post("/api/themes", { name, theme }),
+  getTheme: (id) => json(`/api/themes/${id}`),
+  updateTheme: (id, body) => patch(`/api/themes/${id}`, body),
+  duplicateTheme: (id) => post(`/api/themes/${id}/duplicate`),
+  resetTheme: (id) => post(`/api/themes/${id}/reset`),
+  restoreTheme: (id) => post(`/api/themes/${id}/restore`),
+  deleteTheme: (id) => del(`/api/themes/${id}`),
+  themeDirection: (id, style) => post(`/api/themes/${id}/direction`, { style: style || "" }),
+  // a theme on a live run: what the tokens would rewrite, one reviewable patch, then apply or reject
+  runTheme: (id) => json(`/api/runs/${id}/theme`),
+  themeFromRequest: (id, body) => post(`/api/runs/${id}/theme/from-request`, body),
+  themePreview: (id, body) => post(`/api/runs/${id}/theme/preview`, body),
+  themePropose: (id, body) => post(`/api/runs/${id}/theme/propose`, body),
+  themeApply: (id, body) => post(`/api/runs/${id}/theme/apply`, body),
+  themeReject: (id, body) => post(`/api/runs/${id}/theme/reject`, body),
+  // real features on a live run: the catalog, what a request means, one reviewable build, then apply or reject
+  capabilities: () => json("/api/capabilities"),
+  featureStatus: (id) => json(`/api/runs/${id}/features`),
+  featurePlan: (id, body) => post(`/api/runs/${id}/features/plan`, body),
+  featurePropose: (id, body) => post(`/api/runs/${id}/features/propose`, body),
+  featureApply: (id, body) => post(`/api/runs/${id}/features/apply`, body),
+  featureReject: (id, body) => post(`/api/runs/${id}/features/reject`, body),
   // environment manager (metadata only: the server never sends a secret value)
   configStatus: () => json("/api/config/status"),
   envExample: () => json("/api/config/env-example"),

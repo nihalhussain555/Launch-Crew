@@ -3,8 +3,9 @@ import { Link, useParams } from "react-router-dom";
 import IdeaForm from "../components/IdeaForm";
 import Icon from "../components/Icon";
 import Modal from "../components/Modal";
-import { TEMPLATES, catIcon } from "../constants";
+import { TEMPLATES, catIcon, templateSpec, templateWizardLink } from "../constants";
 import { useStartRun } from "../hooks/useStartRun";
+import { useStyleRegistry } from "../hooks/useStyleRegistry";
 import { slugify } from "../utils";
 
 const CREW = [
@@ -22,6 +23,7 @@ export default function TemplateDetail() {
   const { slug } = useParams();
   const [open, setOpen] = useState(false);
   const { start, busy } = useStartRun();
+  const { reg, styleOf } = useStyleRegistry();
   const t = TEMPLATES.find((x) => slugify(x.title) === slug);
 
   if (!t) {
@@ -47,6 +49,7 @@ export default function TemplateDetail() {
           </div>
         </div>
         <div className="row">
+          <Link className="btn ghost" to={templateWizardLink(t)}><Icon name="sliders" size={15} /> Refine in the wizard</Link>
           <button className="btn primary" onClick={() => setOpen(true)}><Icon name="rocket" size={16} /> Launch this idea</button>
         </div>
       </div>
@@ -55,6 +58,20 @@ export default function TemplateDetail() {
         <h2>The idea</h2>
         <p className="lead-copy">{t.idea}</p>
         <p className="muted small">Edit the wording before you start — the crew builds exactly what you submit.</p>
+        <div className="tpl-brief">
+          <span className="small">
+            Launches as a {reg?.business_types.find((b) => b.key === t.business)?.label.toLowerCase() || t.business} site
+            in the {styleOf(t.style)?.label || t.style} style.
+          </span>
+          {t.sections.length > 0 && (
+            <span className="row wrap">{t.sections.map((s) => <span key={s} className="chip">{s}</span>)}</span>
+          )}
+        </div>
+        <p className="muted small">
+          {reg
+            ? "These are the brief this card sends to the crew. Change any of it in the wizard instead, if you like."
+            : "The design registry is still loading, so the style is shown by its id."}
+        </p>
       </section>
 
       <section className="card">
@@ -103,8 +120,18 @@ export default function TemplateDetail() {
       </section>
 
       <Modal open={open} onClose={() => setOpen(false)} title={t.title}>
-        <p className="muted">Tweak the wording if you like, then start the crew.</p>
-        <IdeaForm initial={t.idea} onSubmit={async (idea) => { if (await start(idea)) setOpen(false); }} busy={busy} showExamples={false} submitLabel="Launch this idea" rows={4} />
+        <p className="muted">Tweak the wording if you like, then start the crew. The site type, style and sections above are sent with it.</p>
+        <IdeaForm
+          initial={t.idea}
+          onSubmit={async (idea) => { if (await start(idea, templateSpec(t))) setOpen(false); }}
+          busy={busy}
+          showExamples={false}
+          submitLabel="Launch this idea"
+          rows={4}
+        />
+        <p className="muted small">
+          Different brief? <Link to={templateWizardLink(t)}>Open it in the creation wizard</Link>.
+        </p>
       </Modal>
     </>
   );

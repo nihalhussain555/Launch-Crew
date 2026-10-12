@@ -20,6 +20,8 @@ async def ensure_indexes(db) -> None:
     await db.run_events.create_index([("run_id", 1), ("seq", 1)], unique=True)
     await db.runs.create_index("share_token")
     await db.feedback.create_index([("run_id", 1), ("created_at", 1)])
+    # Saved themes: a user's own library, newest touched first.
+    await db.themes.create_index([("user_id", 1), ("updated_at", -1)])
     # Preview links: a digest lookup on entry, and Mongo's own reaper for anything the app never read again.
     await db.previews.create_index("token_hash", unique=True)
     await db.previews.create_index([("run_id", 1), ("exp", 1)])

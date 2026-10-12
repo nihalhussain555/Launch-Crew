@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Launch Crew — Project &amp; Technology Overview</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm 18mm 14mm; }
+  * { box-sizing: border-box; }
+  body {
+    font: 10.5pt/1.55 "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #16202e; margin: 0;
+  }
+  h1 { font-size: 22pt; line-height: 1.15; margin: 0 0 4pt; letter-spacing: -0.02em; }
+  h2 { font-size: 14pt; margin: 22pt 0 7pt; padding-bottom: 4pt; border-bottom: 1.5pt solid #16202e;
+       letter-spacing: -0.01em; page-break-after: avoid; break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 14pt 0 4pt; page-break-after: avoid; break-after: avoid; }
+  p  { margin: 0 0 7pt; }
+  ul { margin: 0 0 8pt; padding-left: 15pt; }
+  li { margin-bottom: 3pt; }
+  code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 9.2pt;
+         background: #eef2f7; padding: 0.5pt 3pt; border-radius: 3pt; }
+  .sub { color: #4b5b70; font-size: 11pt; margin: 0 0 12pt; }
+  .meta { font-size: 8.8pt; color: #64748b; border-top: 0.75pt solid #cbd5e1; padding-top: 6pt; }
+  .stats { display: flex; gap: 5pt; margin: 10pt 0 4pt; }
+  .stat { flex: 1 1 0; border: 0.75pt solid #cbd5e1; border-radius: 6pt; padding: 6pt 7pt;
+          background: #f8fafc; }
+  .stat b { display: block; font-size: 13pt; line-height: 1.2; }
+  .stat span { font-size: 8.2pt; color: #4b5b70; text-transform: uppercase; letter-spacing: 0.04em; }
+  table { width: 100%; border-collapse: collapse; margin: 4pt 0 10pt; font-size: 9.6pt; }
+  th { text-align: left; background: #16202e; color: #fff; padding: 5pt 6pt; font-weight: 600;
+       font-size: 8.6pt; text-transform: uppercase; letter-spacing: 0.05em; }
+  td { padding: 5pt 6pt; border-bottom: 0.75pt solid #dbe2ea; vertical-align: top; }
+  tr:nth-child(even) td { background: #f7f9fc; }
+  td.t { font-weight: 600; width: 26%; }
+  td.why { width: 44%; }
+  pre { background: #0f172a; color: #e2e8f0; padding: 9pt 10pt; border-radius: 6pt;
+        font-family: "Cascadia Mono", Consolas, monospace; font-size: 8.4pt; line-height: 1.5;
+        overflow: hidden; white-space: pre; margin: 4pt 0 10pt; }
+  .note { border-left: 3pt solid #b45309; background: #fdf6ec; padding: 7pt 9pt; margin: 4pt 0 10pt;
+          font-size: 9.8pt; border-radius: 0 5pt 5pt 0; page-break-inside: avoid; break-inside: avoid; }
+  .ok   { border-left-color: #0f766e; background: #eefaf7; }
+  .page { page-break-before: always; }
+  .avoid { page-break-inside: avoid; }
+  .kicker { font-size: 8.6pt; text-transform: uppercase; letter-spacing: 0.12em; color: #b45309;
+            font-weight: 700; margin-bottom: 6pt; }
+</style>
+</head>
+<body>
+
+<div class="kicker">Technical overview</div>
+<h1>Launch Crew</h1>
+<p class="sub">What the project does, the technology it is built with, and why each choice was made.</p>
+<p class="meta">
+  Repository: <code>launch-crew</code> (FastAPI backend + React client) ·
+  Document generated from the working tree, not from design notes · 11 October 2026
+</p>
+
+<div class="stats avoid">
+  <div class="stat"><b>2</b><span>Services</span></div>
+  <div class="stat"><b>10</b><span>Pipeline agents</span></div>
+  <div class="stat"><b>12</b><span>Design styles</span></div>
+  <div class="stat"><b>11</b><span>API routers</span></div>
+  <div class="stat"><b>28</b><span>Test modules</span></div>
+</div>
+
+<h2>1. What the project is</h2>
+<p>
+Launch Crew is an AI product-creation pipeline that turns one free-text idea into a deployed marketing
+site. A user signs up, describes a business (or picks a template and refines it through a multi-step
+wizard), and a crew of specialised agents researches the idea, positions it, writes the copy, chooses a
+design direction, builds real HTML/CSS/JS, checks its own output <em>in a real browser</em>, and stops at a
+human approval gate. Only after the user clicks <strong>Approve</strong> does the Launcher deploy.
+</p>
+<p>Everything after the build is work on a live artefact, not a screenshot:</p>
+<ul>
+  <li><strong>Workspace</strong> — the generated page is split into <code>index.html</code>, <code>styles.css</code>,
+      <code>app.js</code> and a <code>README.md</code>, browsable, editable and downloadable as a zip.</li>
+  <li><strong>Version control</strong> — whole-file-set snapshots per run, named checkpoints, side-by-side diff,
+      undo/redo and restore, with conflict detection when the page changed underneath you.</li>
+  <li><strong>Plain-English editing</strong> — a chat request is routed to the agent that owns that layer
+      (copy, design or page) instead of regenerating everything.</li>
+  <li><strong>Visual editor</strong> — click an element in the sandboxed preview, locate it in source, get an
+      AI proposal, then apply or reject it.</li>
+  <li><strong>Audits</strong> — on-demand security, SEO, accessibility, performance, dependency and generated-test
+      passes, each with a repair path.</li>
+  <li><strong>Live preview &amp; sharing</strong> — short-lived, revocable preview tickets and public share links.</li>
+</ul>
+
+<h2>2. How a run works</h2>
+<pre>
+ idea  ->  Researcher  ->  Strategist  ->  Copywriter  ->  Designer  ->  Engineer
+                                                                            |
+                                     +--- fixes <-- Critic <-- Playwright --+   (max 3 iterations)
+                                     |
+                          Panel  ->  awaiting_approval  ->  Launcher  ->  Netlify
+                                                          (human click)
+</pre>
+<p>
+The orchestrator is a hand-written pipeline (<code>app/orchestrator/graph.py</code>, its own docstring opens
+"Custom orchestrator (no framework)"), not a third-party agent framework. It keeps an explicit
+<code>RunContext</code>, streams every step to the client over SSE, enforces guardrails
+(<code>MAX_STEPS</code>, token budget, per-agent timeout, critic-iteration cap, tool-round cap) and persists
+run events so a refresh re-attaches to a run in progress.
+</p>
+<ul>
+  <li><strong>Structured agents validate output</strong> — Pydantic schemas with one corrective retry on bad JSON.</li>
+  <li><strong>The Engineer returns raw HTML</strong> — JSON-escaping a whole page is fragile, so it is sanitised and
+      structurally checked instead.</li>
+  <li><strong>Reviews are advisory, failures are not</strong> — the Critic only calls the LLM when a browser check
+      actually failed, keeping token cost proportional to real problems.</li>
+  <li><strong>Deploys are atomic</strong> — a single <code>awaiting_approval → deploying</code> transition prevents
+      double or forged deployments.</li>
+</ul>
+
+<h2>3. Architecture and module map</h2>
+<table class="avoid">
+  <tr><th>Layer</th><th>Contents</th></tr>
+  <tr><td class="t">Backend <code>app/</code></td><td><code>main.py</code>, <code>config.py</code>,
+      <code>core/</code> (JWT, bcrypt, dependencies, rate limiting), <code>db/</code> (Mongo connection +
+      indexes), <code>llm/</code> (Groq client, deterministic mock provider, mock edits),
+      <code>agents/</code> (10 agents + schemas + the style registry + variants),
+      <code>orchestrator/</code> (graph, state, runner, artifacts, readiness),
+      <code>services/</code> (change impact, codebase index, preview, visual edit, workspace manager),
+      <code>tools/</code> (browser checks, sanitizer, splitter, differ, deploy, web search, file writer,
+      six audit scanners, secret scan, dependency scan, test generation), <code>api/</code> (11 routers),
+      <code>prompts/*.md</code>.</td></tr>
+  <tr><td class="t">Frontend <code>src/</code></td><td>23 pages, 45 components, 4 hooks, a single
+      <code>api.js</code> fetch wrapper, one 682-line token-driven stylesheet.</td></tr>
+  <tr><td class="t">Data</td><td>MongoDB collections: <code>users</code>, <code>projects</code>, <code>runs</code>,
+      <code>run_events</code>, <code>feedback</code>, <code>previews</code> — indexed on user/project/time,
+      run/sequence (unique), share token, and a TTL index on preview expiry.</td></tr>
+  <tr><td class="t">Artifacts</td><td>Generated HTML and screenshots go through one <code>Storage</code>
+      abstraction: <code>mongo</code> (default, survives redeploys) or <code>local</code> disk.</td></tr>
+</table>
+<p class="meta">
+Measured from the working tree: 72 Python modules under <code>backend/app/</code> (~11,100 lines),
+5,257 lines of pytest across 28 test modules, 82 JavaScript modules in the client (~7,900 lines).
+</p>
+
+<div class="page"></div>
+<h2>4. Backend technology, and why</h2>
+<table>
+  <tr><th>Technology</th><th>Role here</th><th>Why it was chosen</th></tr>
+  <tr><td class="t">Python 3.10–3.12</td><td>Whole backend.</td>
+      <td class="why">The agent, validation and HTML-analysis ecosystem (Pydantic, BeautifulSoup, Playwright)
+      is strongest in Python. The pinned Playwright Docker image ships 3.12, so the code stays compatible
+      across 3.10–3.12 rather than tracking the newest release.</td></tr>
+  <tr><td class="t">FastAPI 0.115</td><td>REST API, SSE streaming, request validation, OpenAPI docs.</td>
+      <td class="why">Native async matters when a single run holds many sequential LLM and browser calls;
+      Pydantic-first validation means agent output and API payloads share one model layer; automatic
+      <code>/docs</code> doubles as the API contract for the client.</td></tr>
+  <tr><td class="t">Uvicorn</td><td>ASGI server (dev and containers).</td>
+      <td class="why">The standard FastAPI runner; <code>uvicorn[standard]</code> adds the HTTP/1.1 and
+      websockets extras without a separate web-server layer.</td></tr>
+  <tr><td class="t">Pydantic 2.10 + pydantic-settings</td><td>Agent output schemas, request bodies, and all
+      configuration from environment.</td>
+      <td class="why">Structured LLM output needs a validator, not a parser. Model names deliberately have
+      <em>no</em> defaults — they are configured in <code>.env</code>, because provider model IDs rotate
+      faster than code changes. A blank value is treated as "unset" so an empty <code>MONGO_URI</code> in
+      <code>.env</code> cannot wedge startup.</td></tr>
+  <tr><td class="t">Motor 3.6 / PyMongo 4.9 + MongoDB 7</td><td>Persistence for users, projects, runs, run
+      events, feedback, previews.</td>
+      <td class="why">Run state is genuinely irregular — agent payloads, file-set snapshots, audit results and
+      event logs differ per run — so a document store avoids a schema migration for every new field. Motor is
+      the async driver, so no thread-pool bridging. The <code>run_events</code> <code>(run_id, seq)</code>
+      unique index is what makes SSE replay and reconnect correct.</td></tr>
+  <tr><td class="t">mongomock-motor</td><td>In-memory database when <code>MONGO_URI=mock://</code>.</td>
+      <td class="why">The entire 28-module test suite runs without a Mongo service, which makes tests
+      deterministic and CI cheap. The same index definitions still execute, so index regressions are caught.</td></tr>
+  <tr><td class="t">Groq (via <code>groq</code> SDK)</td><td>LLM for all ten agents.</td>
+      <td class="why">Chosen for low latency and a generous free tier, which matters for interactive runs.
+      Three model slots (<code>GROQ_MODEL</code>, <code>GROQ_FAST_MODEL</code>, optional
+      <code>GROQ_VISION_MODEL</code>) let cheap agents run on a cheaper model and the visual review be opt-in.
+      A comma-separated key pool rotates round-robin and parks only the key that returned 429, honouring
+      <code>retry-after</code> where present, so one rate limit does not stall a run.</td></tr>
+  <tr><td class="t">Offline <code>MockProvider</code></td><td><code>MOCK_LLM=true</code> produces a complete,
+      deterministic run with no API key.</td>
+      <td class="why">This is the single most consequential architectural choice: the pipeline, the browser
+      checks, the approval gate, styles and tests are all verifiable offline, and CI never depends on a paid
+      provider. Deploys are simulated and <em>labelled as simulated</em> rather than reported as real.</td></tr>
+  <tr><td class="t">Playwright 1.49 + Chromium</td><td>Renders the generated page at 1280px and 375px and
+      collects real metrics — contrast, font size, tap-target size, horizontal overflow — plus full-page
+      screenshots.</td>
+      <td class="why">"Tests its own work" is only true if a real layout engine is involved; static parsing
+      cannot know whether text actually overlaps or whether a button is 44px. The design keeps the browser as
+      a <em>metric collector</em> and makes every pass/fail decision in pure Python
+      (<code>evaluate_metrics</code>), so the checks remain unit-testable without launching Chromium.</td></tr>
+  <tr><td class="t">BeautifulSoup 4.12</td><td>DOM-level static analysis for the SEO, accessibility, security
+      and dependency audits, and for the sanitizer.</td>
+      <td class="why">Structural questions (missing alt text, absent meta, external script tags) are cheaper
+      and more reliable against a parsed tree than against regex or a browser.</td></tr>
+  <tr><td class="t">httpx</td><td>Async outbound calls: Netlify deploy API, Tavily search, preview probes.</td>
+      <td class="why">Async client with timeouts and a response shape that keeps retry logic readable.</td></tr>
+  <tr><td class="t">PyJWT 2.10 + bcrypt 4.2</td><td>Stateless bearer tokens (720-minute expiry) and password
+      hashing.</td>
+      <td class="why">No session table for a two-service deployment. bcrypt is the conventional, battle-tested
+      choice; the code truncates to bcrypt's real 72-byte limit and the API schema caps passwords to match,
+      so the boundary is explicit rather than a silent bug. OAuth was deliberately <em>not</em> implemented,
+      because a half-wired provider would be a fake success path.</td></tr>
+  <tr><td class="t">Custom rate limiter</td><td>In-process per-user run-creation limit
+      (<code>RUNS_PER_HOUR</code>).</td>
+      <td class="why">One Redis-free control is enough at this scale, and being in-process makes it directly
+      testable. Documented as per-process — a multi-replica deployment would need a shared store.</td></tr>
+  <tr><td class="t">Server-Sent Events</td><td>Live run trace to the browser.</td>
+      <td class="why">The data flow is one-directional, so SSE is lighter than a websocket server and survives
+      a refresh via the stored event log. Browsers cannot set headers on <code>EventSource</code>, so only the
+      stream endpoint also accepts <code>?token=</code>; everywhere else stays header-only.</td></tr>
+  <tr><td class="t">Netlify API</td><td>Real deploys when <code>NETLIFY_AUTH_TOKEN</code> is set; an obviously
+      flagged mock URL when it is not.</td>
+      <td class="why">Static-hosting API needs no server on our side, matching generated static sites. A
+      content-type probe diagnoses the classic "deployed page served as <code>text/plain</code>" failure
+      instead of returning a bare error.</td></tr>
+  <tr><td class="t">Tavily</td><td>Web search for the Researcher; falls back to mock search with no key.</td>
+      <td class="why">A search API purpose-built for LLM agents keeps the Researcher's tool loop small
+      (<code>TOOL_ROUNDS_CAP</code>) and budget-bounded.</td></tr>
+  <tr><td class="t">pytest</td><td>All backend tests.</td>
+      <td class="why">Fixtures and <code>monkeypatch</code> let the Chromium layer be replaced while the API,
+      orchestrator, workspace, styles and version-control tests run against real code paths. Browser tests
+      auto-skip when Chromium is absent, so the suite never fails for an environment reason it cannot fix.</td></tr>
+</table>
+
+<div class="page"></div>
+<h2>5. The design registry: why output is not one template</h2>
+<p>
+A generator that produces the same centred-hero page in a different background colour is not a design
+system, so the styles are modelled as data and resolved per run.
+</p>
+<table class="avoid">
+  <tr><th>Module</th><th>Owns</th></tr>
+  <tr><td class="t"><code>app/agents/styles.py</code></td>
+      <td>Twelve <code>Style</code> records — each declaring its hero, navigation, feature layout, motif,
+      corner radius, type tokens, spacing tokens, palette, font stacks, section set, section order and
+      explicit rules. Plus 14 business types, section keyword matching, and the card payloads the UI reads.</td></tr>
+  <tr><td class="t"><code>app/agents/variants.py</code></td>
+      <td>Turns a style plus this run's brief into one machine-readable <code>DesignDirection</code>:
+      brief-implied sections, the requested colour re-checked against WCAG AA, and final section order.
+      Memoised, serialised onto run state as a plain dict, and rendered into a single
+      <code>DESIGN_DIRECTION</code> block that both the Designer and the Engineer receive.</td></tr>
+  <tr><td class="t"><code>app/llm/mock.py</code>, <code>mock_edits.py</code></td>
+      <td>Render the direction as real markup offline, so "these two styles are genuinely different" is a
+      testable assertion, not a manual inspection.</td></tr>
+</table>
+<p>Why this matters operationally:</p>
+<ul>
+  <li><strong>Revisions keep identity.</strong> A stored direction is reused, so editing copy on a brutalist
+      run does not silently re-skin it.</li>
+  <li><strong>Contrast cannot be broken by a brief.</strong> A requested colour that cannot reach AA on this
+      style's surfaces is adjusted — and the reason is reported in the run trace as <code>color_note</code>,
+      never silently dropped.</li>
+  <li><strong>Frontends never duplicate truth.</strong> Wizard, gallery, detail pages and the style picker all
+      read <code>GET /api/styles</code>; <code>POST /api/styles/resolve</code> previews exactly what
+      <code>POST /api/projects</code> will store — a test asserts the two agree.</li>
+  <li><strong>Legacy runs still resolve.</strong> Directions from before the style system (palette-only
+      <code>theme_key</code> records) rebuild the page they originally produced.</li>
+</ul>
+
+<h2>6. Client technology, and why</h2>
+<table class="avoid">
+  <tr><th>Technology</th><th>Role here</th><th>Why it was chosen</th></tr>
+  <tr><td class="t">React 18.3</td><td>Whole UI.</td>
+      <td class="why">The app is a set of stateful panels over one long-running job; React's model fits, and
+      18 is what the existing code and router version target. No framework switch was warranted.</td></tr>
+  <tr><td class="t">Vite 5.4</td><td>Dev server and static build.</td>
+      <td class="why">Zero-config ESM dev with instant HMR; <code>VITE_API_URL</code> is baked at build time,
+      which is fine because it is a public value. Only three runtime dependencies keep the bundle honest.</td></tr>
+  <tr><td class="t">react-router-dom 6.28</td><td>Public marketing routes, auth routes, and the authenticated
+      app shell.</td>
+      <td class="why">Nested layouts let the public site and the workspace share one tree without duplicating
+      chrome.</td></tr>
+  <tr><td class="t">Hand-written CSS custom properties</td><td>All 682 lines of design tokens, components and
+      the dark theme via <code>:root[data-theme="dark"]</code>.</td>
+      <td class="why">Token-driven CSS gives theme switching and consistent spacing without a utility-class
+      build step or a component library's opinion. Critically: the <em>generated sites</em> are the product,
+      so the app shell stays deliberately plain and avoids importing a framework's look.</td></tr>
+  <tr><td class="t">Plain <code>fetch</code> wrapper (<code>api.js</code>)</td><td>Every backend call, bearer
+      token injection, and a typed <code>ApiError</code>.</td>
+      <td class="why">One small module is easier to audit than Axios plus interceptors plus a query library —
+      and there are no server-cache semantics worth the dependency here.</td></tr>
+  <tr><td class="t">Custom hooks</td><td><code>useRunStream</code> (SSE with polling fallback),
+      <code>useRun</code>, <code>useStartRun</code>, <code>useStyleRegistry</code>, plus toast/auth/theme.</td>
+      <td class="why">The polling fallback is what makes run tracking survive a proxy that buffers SSE.</td></tr>
+  <tr><td class="t">Custom SVG icon set + <code>LaunchCrewLogo</code></td><td>All iconography.</td>
+      <td class="why">A single inline icon component adds no network requests and no icon-pack version churn.
+      One logo component — deliberately, so no alternative marks appear across the app.</td></tr>
+  <tr><td class="t">No frontend test framework</td><td>—</td>
+      <td class="why">Stated plainly rather than glossed over: client verification is
+      <code>npm run build</code> plus a real browser pass against a throwaway backend. This is the weakest
+      part of the toolchain and the highest-value thing to add.</td></tr>
+</table>
+
+<h2>7. Quality, safety and delivery</h2>
+<h3>Guardrails around generated code</h3>
+<ul>
+  <li>HTML sanitizer strips external scripts, links, images and fonts, neutralises forms, blocks network calls
+      and injects a CSP meta tag; previews render in a sandboxed iframe.</li>
+  <li>API keys live in the backend only. The client bundle carries public configuration alone.</li>
+  <li>Secret scanning and dependency scanning run as first-class audits rather than as a promise.</li>
+  <li>Guardrail limits (steps, tokens, per-agent timeout, critic iterations, tool rounds, hourly runs) are
+      settings, so a runaway run is bounded by configuration, not by luck.</li>
+</ul>
+<h3>Verification actually performed for the current state</h3>
+<ul>
+  <li><code>pytest tests/test_wizard_api.py</code> → <strong>23 passed</strong> (registry integrity, twelve
+      distinct slot tuples, resolve-equals-stored preview, parametrised 422s, back-compat briefs, per-run style
+      override, compare quota behaviour, cross-user isolation).</li>
+  <li>Thirteen targeted suites → <strong>247 passed, 1 failed</strong>. The failure is
+      <code>test_orchestrator.py::test_launch_after_approval</code>: a real Netlify token in
+      <code>backend/.env</code> makes the test hit the live API and take 429. Pre-existing and environmental,
+      not a code defect; left unfixed and reported.</li>
+  <li><code>npm run build</code> → clean, 114 modules.</li>
+  <li>Browser pass against a throwaway stack (<code>MOCK_LLM=true</code>, <code>MONGO_URI=mock://</code>,
+      on ports 8001/5274): 12 style cards and 14 site types loaded, the review line printed the resolved
+      direction, the launched page contained exactly the briefed sections and the requested AA-safe colour,
+      compare produced two finished runs in different styles from one brief, and the console was clean.
+      Tear-down removed the temporary build and both processes.</li>
+</ul>
+<h3>Deployment topology</h3>
+<table class="avoid">
+  <tr><th>Environment</th><th>How</th></tr>
+  <tr><td class="t">Local, no keys</td><td><code>docker compose up --build</code> — Mongo 7, backend image with
+      Playwright Chromium (<code>shm_size: 1gb</code>, because Chromium needs more than Docker's default 64MB),
+      and the client behind nginx.</td></tr>
+  <tr><td class="t">Local, no Docker</td><td><code>uvicorn app.main:app --reload</code> with
+      <code>MONGO_URI=mock://</code> plus <code>vite dev</code>.</td></tr>
+  <tr><td class="t">Production</td><td><code>render.yaml</code> Blueprint for the backend (Starter plan or
+      larger — Chromium will not fit in 512MB — with a persistent disk for artifacts), Vercel for the client,
+      MongoDB Atlas for data.</td></tr>
+</table>
+
+<div class="page"></div>
+<h2>8. Choices that were deliberately <em>not</em> made</h2>
+<table class="avoid">
+  <tr><th>Instead of</th><th>Why the simpler thing won</th></tr>
+  <tr><td class="t">LangGraph / CrewAI / LlamaIndex</td>
+      <td class="why">The pipeline is one linear path with one bounded loop and one human gate. A framework
+      would add dependency weight and obscure the guardrails that make this auditable — and the file says so
+      in its own docstring.</td></tr>
+  <tr><td class="t">SQLAlchemy / an ORM</td>
+      <td class="why">A document store plus targeted indexes. An ORM would fight the irregular run payload
+      and add a migration step for every new agent output field.</td></tr>
+  <tr><td class="t">Redis / Celery / a worker queue</td>
+      <td class="why">Background tasks in-process with persisted run events. The queue's durability is
+      reproduced by the event log, at zero extra infrastructure. Documented trade-off: a restart interrupts
+      in-flight runs, and the code marks them failed rather than pretending they resumed.</td></tr>
+  <tr><td class="t">A UI component library + Redux</td>
+      <td class="why">Token CSS plus local hook state. A library's visual identity would compete with the
+      generated sites it is meant to showcase.</td></tr>
+  <tr><td class="t">Real OAuth, real payments, fake "success" buttons</td>
+      <td class="why">Not implemented, and not faked. Unconfigured integrations report their status honestly
+      (simulated deploys are labelled, missing keys surface as configuration states), because a fake success
+      message is worse than a missing feature.</td></tr>
+  <tr><td class="t">Building every page a brief mentions</td>
+      <td class="why">The brief can carry a page list and the registry recommends pages per business type, but
+      the builder produces a single page — see limitations.</td></tr>
+</table>
+
+<h2>9. Honest limitations of the current build</h2>
+<div class="note">
+  <p>These are the parts of the project that are genuinely not there yet. They are listed so the document
+  describes the software, not the intention behind it.</p>
+  <ul>
+    <li><strong>One page per run.</strong> <code>spec.pages</code> is captured, recommended and previewed, but
+        no route builds extra pages; the workspace is a single page split into four files.</li>
+    <li><strong>Regenerating one section in place</strong> is partial: the visual editor locates and proposes
+        a source patch, but there is no section-tree schema stored alongside the source, so structured
+        add/duplicate/hide/reorder is not available.</li>
+    <li><strong>No animation system.</strong> Motion exists only as hand-written CSS on the app shell; there is
+        no preset library, live preview control surface, or per-section motion API. The generated pages do
+        carry <code>prefers-reduced-motion</code> handling, which is the requirement every later addition
+        must keep.</li>
+    <li><strong>No build executor and no per-project backend.</strong> Generated output is static
+        HTML/CSS/JS. There is no compile step, no dependency installation and no server-side runtime for a
+        user's project, so a brief that needs a database or authentication gets scaffolding and instructions,
+        not a working service.</li>
+    <li><strong>Plain-English feature coverage is narrow.</strong> Chat edits route to copy, design or page
+        agents; features needing real infrastructure (auth, checkout, bookings, uploads, webhooks, analytics)
+        are not implemented by editing a static page.</li>
+    <li><strong>Rate limiting is per-process</strong>, so it does not hold across replicas.</li>
+    <li><strong>Artifact durability depends on the storage choice</strong>: <code>local</code> without a
+        persistent disk loses previews on redeploy; S3/R2 is a documented swap point, not implemented.</li>
+    <li><strong>The client has no automated tests</strong>, so regressions there are caught by the browser
+        pass, not by CI.</li>
+    <li><strong>One known environmental test failure</strong> (live Netlify token, §7) remains open.</li>
+  </ul>
+</div>
+
+<h2>10. Working with the code</h2>
+<pre>
+cp backend/.env.example backend/.env &amp;&amp; cp frontend/.env.example frontend/.env
+docker compose up --build          # client :5173  ·  API :8000/docs
+
+cd backend &amp;&amp; pip install -r requirements.txt &amp;&amp; playwright install --with-deps chromium
+uvicorn app.main:app --reload      # MONGO_URI=mock:// needs no database server
+pytest                             # browser tests auto-skip if Chromium is missing
+
+cd frontend &amp;&amp; npm install &amp;&amp; npm run dev
+</pre>
+<p class="meta">
+Set <code>MOCK_LLM=true</code> to exercise the complete pipeline — real Playwright checks, real approval gate,
+real workspace and audits — with no API key and no cost. Set <code>GROQ_MODEL</code> /
+<code>GROQ_FAST_MODEL</code> from Groq's current model list; nothing is hardcoded in the codebase, by design.
+</p>
+
+</body>
+</html>
