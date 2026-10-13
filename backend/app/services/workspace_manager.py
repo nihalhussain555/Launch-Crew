@@ -42,8 +42,8 @@ OPS = ("replace", "replace_all", "append", "set")
 # The last three are the editor's own file operations: they move the file set without touching the page,
 # so they earn an undo step but never a rebuild.
 CAUSE_KINDS = ("crew rebuild", "file patch", "workspace restore", "version restore", "manual checkpoint",
-               "visual edit", "theme edit", "feature build", "file create", "file rename", "file delete",
-               "unattributed")
+               "visual edit", "theme edit", "feature build", "assistant edit",
+               "file create", "file rename", "file delete", "unattributed")
 
 # Files the crew rewrites itself: patching them here would be undone by the next build.
 GENERATED_ONLY = {"README.md"}

@@ -34,6 +34,7 @@ async function raw(path, opts = {}) {
 const json = async (path, opts) => (await raw(path, opts)).json();
 const post = (path, body) => json(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
 const patch = (path, body) => json(path, { method: "PATCH", body: JSON.stringify(body) });
+const put = (path, body) => json(path, { method: "PUT", body: JSON.stringify(body) });
 const del = async (path) => { await raw(path, { method: "DELETE" }); };
 
 export const api = {
@@ -95,6 +96,30 @@ export const api = {
   wsLabel: (id, w, label) => post(`/api/runs/${id}/workspace/versions/${w}/label`, { label }),
   wsUndo: (id, baseVersion) => post(`/api/runs/${id}/workspace/undo`, { base_version: baseVersion }),
   wsRedo: (id, baseVersion) => post(`/api/runs/${id}/workspace/redo`, { base_version: baseVersion }),
+  // IDE: the same workspace as an editor. Files open with the digest a save must send back, source files
+  // write directly, and the page's own names are refused here and go through wsPlan/wsApply instead.
+  ideProjects: () => json("/api/ide/projects"),
+  ideImportStatus: () => json("/api/ide/import"),
+  ideFile: (id, name) => json(`/api/runs/${id}/workspace/files/${encodeURIComponent(name)}`),
+  ideCreate: (id, body) => post(`/api/runs/${id}/workspace/files`, body),
+  ideSave: (id, name, body) => put(`/api/runs/${id}/workspace/files/${encodeURIComponent(name)}`, body),
+  ideRename: (id, name, to) => patch(`/api/runs/${id}/workspace/files/${encodeURIComponent(name)}`, { name: to }),
+  ideDelete: (id, name) => json(`/api/runs/${id}/workspace/files/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  ideSearch: (id, { q, file = "", regex = false, caseSensitive = false }) => {
+    const p = new URLSearchParams({ q });
+    if (file) p.set("file", file);
+    if (regex) p.set("regex", "true");
+    if (caseSensitive) p.set("case", "true");
+    return json(`/api/runs/${id}/workspace/search?${p}`);
+  },
+  // what this deployment can run: never a simulated terminal, always the real capability verdict
+  ideExec: (id) => json(`/api/runs/${id}/workspace/exec`),
+  ideRun: (id, body) => post(`/api/runs/${id}/workspace/exec`, body),
+  // the assistant: plan in plain English, review the diff it proposes, then apply through the patch path
+  ideAssistantPlan: (id, body) => post(`/api/runs/${id}/ide/plan`, body),
+  ideAssistantProposals: (id) => json(`/api/runs/${id}/ide/proposals`),
+  ideAssistantApply: (id, body) => post(`/api/runs/${id}/ide/apply`, body),
+  ideAssistantReject: (id, body) => post(`/api/runs/${id}/ide/reject`, body),
   // preview lifecycle: read status, hand out one expiring sandboxed link, revoke every link again
   previewStatus: (id) => json(`/api/runs/${id}/preview`),
   previewStart: (id) => post(`/api/runs/${id}/preview`, {}),

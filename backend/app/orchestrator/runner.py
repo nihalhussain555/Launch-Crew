@@ -8,7 +8,7 @@ from app.agents import variants
 from app.config import Settings
 from app.orchestrator.graph import Orchestrator
 from app.orchestrator.state import GuardrailError, RunContext, RunState
-from app.services import feature_build, theme_edit, visual_edit, workspace_manager
+from app.services import feature_build, ide_assistant, theme_edit, visual_edit, workspace_manager
 from app.utils.logger import get_logger
 
 log = get_logger("runner")
@@ -181,6 +181,32 @@ async def visual_apply_pipeline(app_state, run_id: str, changes: list[dict], req
         except Exception:  # noqa: BLE001 - the proposal is a record, never a reason to lose the page
             log.warning("visual proposal %s on run %s could not be marked", proposal_id, run_id)
         await _keep_last_good(app_state, run_id, ctx, exc, "Visual edit")
+
+
+async def ide_apply_pipeline(app_state, run_id: str, changes: list[dict], request: str,
+                             proposal_id: str) -> None:
+    """Apply a reviewed assistant edit and write the outcome back on the proposal (POST /ide/apply).
+
+    Same pipeline as a typed or clicked patch - checkpoint, sanitizer, publish, Chromium checks, readiness -
+    because an AI patch gets no free pass. The proposal is marked from the plan the pipeline recorded, and a
+    failure says so on the proposal instead of leaving the page mid-change.
+    """
+    ctx = await ctx_for(app_state, run_id)
+    try:
+        plan = await Orchestrator(ctx).apply_workspace_changes(changes, request, kind="assistant edit")
+        entry = ide_assistant.find_entry(ctx.state, proposal_id)
+        entry["plan"] = plan["id"]
+        ide_assistant.mark_proposal(entry, "applied", **plan["result"])
+        await ctx.checkpoint()
+    except Exception as exc:  # noqa: BLE001
+        try:
+            entry = ide_assistant.find_entry(ctx.state, proposal_id)
+            ide_assistant.mark_proposal(entry, "rejected",
+                                        error=(getattr(exc, "message", None) or str(exc))[:300])
+            await ctx.checkpoint()
+        except Exception:  # noqa: BLE001 - the proposal is a record, never a reason to lose the page
+            log.warning("assistant proposal %s on run %s could not be marked", proposal_id, run_id)
+        await _keep_last_good(app_state, run_id, ctx, exc, "Assistant edit")
 
 
 async def theme_apply_pipeline(app_state, run_id: str, proposal_id: str) -> None:

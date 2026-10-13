@@ -571,3 +571,42 @@ class VisualPatch(BaseModel):
         if self.op == "append" and not self.replace.strip():
             raise ValueError("an append needs the text to add in `replace`")
         return self
+
+
+# ---- IDE assistant (one plain-English request over the workspace's own files)
+class IdePatchChange(BaseModel):
+    """One file's edit, in the language the workspace routes already accept.
+
+    `workspace_manager.validate_patch` stays the authority on what an edit means; this only bounds the
+    shape, so a model cannot hand back a megabyte of text or an operation no pipeline knows. The op list
+    and the 12-change cap mirror `workspace_manager.OPS` and `validate_changes`.
+    """
+    file: Annotated[str, Field(min_length=1, max_length=64)]
+    op: str = "replace"
+    find: Annotated[str, Field(max_length=12000)] = ""
+    replace: Annotated[str, Field(max_length=12000)] = ""
+    text: Annotated[str, Field(max_length=60000)] = ""
+    note: Annotated[str, Field(max_length=200)] = ""
+
+    @field_validator("op", mode="before")
+    @classmethod
+    def _op(cls, v):
+        op = str(v or "replace").strip().lower()
+        if op not in {"replace", "replace_all", "append", "set"}:
+            raise ValueError(f"'{op}' is not an edit this workspace accepts - choose replace, "
+                             f"replace_all, append or set")
+        return op
+
+    @model_validator(mode="after")
+    def _has_something_to_write(self):
+        if self.op in ("replace", "replace_all") and not self.find.strip():
+            raise ValueError("a patch needs `find`: text that is really in that file")
+        if self.op in ("append", "set") and not (self.text or self.replace).strip():
+            raise ValueError(f"'{self.op}' needs the text to write")
+        return self
+
+
+class IdePatchSet(BaseModel):
+    """What the assistant says it would do, and the at-most-a-handful of edits it means by that."""
+    summary: Annotated[str, Field(max_length=400)] = ""
+    changes: Annotated[list[IdePatchChange], _trim(12)] = Field(min_length=1)

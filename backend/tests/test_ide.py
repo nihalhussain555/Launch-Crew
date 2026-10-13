@@ -265,6 +265,58 @@ def test_run_reports_that_it_needs_a_sandbox_instead_of_inventing_output(built):
     assert client.post(f"{ws}/exec", headers=h, json={"file": "../etc/passwd"}).status_code == 422
 
 
+# --------------------------------------------------------------------------- choosing a project to open
+
+def test_the_picker_lists_this_users_projects_with_the_run_it_would_open(built):
+    client, h, ws, rid = built
+    body = client.get("/api/ide/projects", headers=h)
+    assert body.status_code == 200
+    feed = body.json()
+    assert feed["counts"] == {"projects": 1, "openable": 1}
+    row = feed["projects"][0]
+    assert row["name"].startswith("A tiny CRM") and row["description"]
+    assert row["can_open"] is True and row["can_write"] is True and row["blocked_reason"] == ""
+    assert row["status"] == "awaiting_approval" and row["version"] == 1 and row["files"] == 4
+    assert row["framework"].startswith("Static HTML")
+    assert "html" in row["languages"] and "css" in row["languages"]
+    assert row["open_run"]["run_id"] == rid and row["run_count"] == 1
+    assert row["last_modified"] and "key" not in body.text       # storage keys stay server-side
+    assert feed["limits"] == {"projects": 200, "runs": 500}
+
+
+def test_the_picker_only_shows_projects_the_caller_own(built):
+    client, h, ws, rid = built
+    assert client.get("/api/ide/projects").status_code == 401
+    r = client.post("/api/auth/register", json={"email": "nosy3@example.com", "password": "supersecret1",
+                                                "name": "N"})
+    other = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    empty = client.get("/api/ide/projects", headers=other).json()
+    assert empty["projects"] == [] and empty["counts"] == {"projects": 0, "openable": 0}
+
+
+def test_a_run_with_nothing_published_is_listed_as_not_openable(client):
+    r = client.post("/api/auth/register", json={"email": "empty@example.com", "password": "supersecret1",
+                                                "name": "E"})
+    h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    pid = client.post("/api/projects", json={"idea": "A page that has not been built yet"}, headers=h).json()["id"]
+    row = client.get("/api/ide/projects", headers=h).json()["projects"][0]
+    assert row["project_id"] == pid and row["run_count"] == 0
+    assert row["can_open"] is False and row["latest_run"] is None
+    assert "no runs yet" in row["blocked_reason"]
+
+
+def test_import_reports_what_it_cannot_do_rather_than_offering_a_dead_button(client):
+    r = client.post("/api/auth/register", json={"email": "imp@example.com", "password": "supersecret1",
+                                                "name": "I"})
+    h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    body = client.get("/api/ide/import", headers=h).json()
+    assert body["available"] is False and body["never_auto_executes"] is True
+    assert {u["kind"] for u in body["unsupported"]} == {"ZIP upload", "GitHub repository"}
+    assert all(u["reason"] and u["would_need"] for u in body["unsupported"])
+    assert body["supported"][0]["kind"] == "launch-crew project"
+    assert client.get("/api/ide/import").status_code == 401
+
+
 # --------------------------------------------------------------------------- who may reach these routes
 
 def test_another_user_and_no_token_get_nothing_at_all(built):

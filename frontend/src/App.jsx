@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useAuth } from "./auth";
 import Icon from "./components/Icon";
@@ -11,6 +12,7 @@ import Dashboard from "./pages/Dashboard";
 import Deployments from "./pages/Deployments";
 import DesignSystem from "./pages/DesignSystem";
 import Home from "./pages/Home";
+import IdeHome from "./pages/IdeHome";
 import Integrations from "./pages/Integrations";
 import Legal from "./pages/Legal";
 import Login from "./pages/Login";
@@ -37,6 +39,10 @@ function Protected({ children }) {
   return <Navigate to={`/login?next=${next}`} replace />;
 }
 
+// Monaco is loaded only by someone who opens a file, so the editor never weighs on the rest of the app.
+const Ide = lazy(() => import("./pages/Ide"));
+const IDE_FALLBACK = <div className="center muted"><Icon name="refresh" size={18} className="spin" /> Loading the editor…</div>;
+
 export default function App() {
   return (
     <Routes>
@@ -61,6 +67,8 @@ export default function App() {
         <Route path="/workflows" element={<Workflows />} />
         <Route path="/chat" element={<ChatStudio />} />
         <Route path="/workspace" element={<CodeWorkspace />} />
+        <Route path="/ide" element={<IdeHome />} />
+        <Route path="/ide/:runId" element={<Suspense fallback={IDE_FALLBACK}><Ide /></Suspense>} />
         <Route path="/versions" element={<VersionHistory />} />
         <Route path="/quality" element={<Quality />} />
         <Route path="/deployments" element={<Deployments />} />

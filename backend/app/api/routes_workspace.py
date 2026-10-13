@@ -154,6 +154,12 @@ async def get_workspace(run_id: str, db=Depends(get_db), settings=Depends(get_se
             "limits": {"ops": list(workspace_manager.OPS), "max_changes": 12,
                        "max_patch_bytes": workspace_manager.MAX_PATCH_BYTES,
                        "max_file_bytes": workspace_manager.MAX_WORKSPACE_FILE_BYTES,
+                       # The naming rules the editor mirrors before it asks, so a bad name is caught where
+                       # it is typed rather than after a round trip: the server stays the authority.
+                       "file_names": {"max_chars": workspace_manager.MAX_NAME_CHARS,
+                                      "extensions": sorted(workspace_manager.ALLOWED_EXTENSIONS),
+                                      "page_names": list(workspace_manager.DERIVED_NAMES),
+                                      "reserved_prefix": [".", "~"]},
                        "cause_kinds": list(workspace_manager.CAUSE_KINDS),
                        "search": {"max_query": workspace_manager.SEARCH_MAX_QUERY,
                                   "max_matches": workspace_manager.SEARCH_MAX_MATCHES,

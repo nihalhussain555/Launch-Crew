@@ -24,6 +24,7 @@ export default function CommandPalette({ open, onClose }) {
       { id: "workflows", label: "Open Agent Workflows", icon: "workflow", run: () => nav("/workflows") },
       { id: "chat", label: "Open AI Chat", icon: "chat", run: () => nav("/chat") },
       { id: "workspace", label: "Open Code Workspace", icon: "code", run: () => nav("/workspace") },
+      { id: "ide", label: "Open the Code IDE", icon: "ide", run: () => nav("/ide") },
       { id: "versions", label: "Open Version History", icon: "layers", run: () => nav("/versions") },
       { id: "quality", label: "Open Security & Quality", icon: "shield", run: () => nav("/quality") },
       { id: "deployments", label: "Open Deployments", icon: "rocket", run: () => nav("/deployments") },

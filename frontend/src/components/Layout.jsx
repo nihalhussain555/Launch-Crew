@@ -21,6 +21,7 @@ const NAV_GROUPS = [
   ] },
   { label: "Build & ship", items: [
     { to: "/workspace", label: "Code Workspace", icon: "code" },
+    { to: "/ide", label: "Code IDE", icon: "ide" },
     { to: "/design", label: "Design System", icon: "palette" },
     { to: "/versions", label: "Version History", icon: "layers" },
     { to: "/quality", label: "Security & Quality", icon: "shield" },

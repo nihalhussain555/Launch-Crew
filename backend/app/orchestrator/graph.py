@@ -236,7 +236,7 @@ class Orchestrator:
         """
         ctx, s = self.ctx, self.ctx.state
         label = {"visual edit": "Visual edit", "theme edit": "Theme edit",
-                 "feature build": "Feature build"}.get(kind, "File-level change")
+                 "feature build": "Feature build", "assistant edit": "Assistant edit"}.get(kind, "File-level change")
         await ctx.checkpoint("running")
         texts = await workspace_manager.load_texts(ctx)
         texts.setdefault("index.html", s.html)

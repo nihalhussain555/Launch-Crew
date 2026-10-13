@@ -63,6 +63,11 @@ class RunState(BaseModel):
     # changes, summary, warnings, plan, version, result}] - the record is the report, so it says what each
     # surface of each capability actually reached.
     feature_edits: list[dict] = Field(default_factory=list)
+    # Proposals from the browser IDE's assistant (app/services/ide_assistant.py): one plain-English request
+    # answered with named edits over the workspace's own files. [{id, at, status, instruction, summary,
+    # changes, affected, files, sent_files, clipped_files, lines_added, lines_removed, impact, plan,
+    # version, result}] - stored patch first, so Apply can re-verify exactly what the reviewer read.
+    ide_edits: list[dict] = Field(default_factory=list)
     # The undo/redo timeline, as snapshot numbers: each entry is a whole file set a step would restore.
     undo_stack: list[int] = Field(default_factory=list)
     redo_stack: list[int] = Field(default_factory=list)
