@@ -9,6 +9,8 @@ Everything is measured from `app/services/codebase_index.py`: a change is planne
 index, the whole file set is snapshotted before anything is overwritten, and `index.html` stays the
 canonical document that the derived `styles.css` / `app.js` are folded back into.
 """
+import shutil
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -50,6 +52,29 @@ class ApplyIn(BaseModel):
 class RestoreIn(BaseModel):
     w: int = Field(ge=1)
     base_version: int | None = None
+
+
+class FileSaveIn(BaseModel):
+    """Writing one source file the editor owns. `base_hash` is the digest the editor read."""
+    text: str = Field(min_length=1)
+    base_hash: str = Field(default="", max_length=64)
+    note: str = Field(default="", max_length=160)
+
+
+class FileCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    text: str = Field(min_length=1)
+    note: str = Field(default="", max_length=160)
+
+
+class FileRenameIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+
+
+class ExecIn(BaseModel):
+    """What the IDE's Run button would ask for. Nothing is executed - see POST /workspace/exec."""
+    file: str = Field(default="", max_length=64)
+    args: str = Field(default="", max_length=200)
 
 
 def _fail(exc: WorkspaceError):
@@ -117,8 +142,9 @@ async def get_workspace(run_id: str, db=Depends(get_db), settings=Depends(get_se
     snapshots = [workspace_version_out(v).model_dump() for v in state.get("workspace_versions") or []]
     return {"version": state.get("html_version", 0), "revisions": state.get("revisions", 0),
             "status": run["status"],
-            "files": [{"name": f["name"], "language": f["language"], "bytes": f["bytes"], "note": f["note"]}
-                      for f in state.get("files") or []],
+            # The same list the workspace page has always shown, now carrying what the editor needs to
+            # decide whether a file may be written at all: kind, save_via, editable and the reason.
+            "files": workspace_manager.describe_workspace(state),
             "snapshots": snapshots,
             "latest_snapshot": max((v["w"] for v in snapshots), default=0),
             "plans": _plans(state)[::-1],
@@ -127,7 +153,11 @@ async def get_workspace(run_id: str, db=Depends(get_db), settings=Depends(get_se
             "validation": state.get("validation"),
             "limits": {"ops": list(workspace_manager.OPS), "max_changes": 12,
                        "max_patch_bytes": workspace_manager.MAX_PATCH_BYTES,
+                       "max_file_bytes": workspace_manager.MAX_WORKSPACE_FILE_BYTES,
                        "cause_kinds": list(workspace_manager.CAUSE_KINDS),
+                       "search": {"max_query": workspace_manager.SEARCH_MAX_QUERY,
+                                  "max_matches": workspace_manager.SEARCH_MAX_MATCHES,
+                                  "time_s": workspace_manager.SEARCH_TIME_S},
                        "keep_snapshots": settings.workspace_versions_keep}}
 
 
@@ -150,6 +180,34 @@ async def get_impact(run_id: str, request: Request, text: str = Query(min_length
     ctx = await _ctx(request, db, run_id, user)
     report = change_impact.analyze(await _index_of(ctx), text, version=ctx.state.html_version)
     return {**report, "headline": change_impact.headline(report)}
+
+
+@router.get("/search")
+async def search_workspace(run_id: str, request: Request, q: str = Query(min_length=1, max_length=200),
+                           file: str | None = Query(None, max_length=64), regex: bool = Query(False),
+                           case: bool = Query(False), db=Depends(get_db), user=Depends(get_current_user)):
+    """Find a phrase or a regular expression across the files as they are stored now.
+
+    Deterministic and read-only: no model, no writes, no tokens. The result says which bounds it hit, so
+    a truncated answer is never mistaken for a clean one.
+    """
+    ctx = await _ctx(request, db, run_id, user)
+    try:
+        texts = await workspace_manager.load_texts(ctx)
+    except WorkspaceError as exc:
+        _fail(exc)
+    name = None
+    if file:
+        try:
+            name = workspace_manager.validate_name(file)
+        except WorkspaceError as exc:
+            _fail(exc)
+        if name not in texts:
+            raise HTTPException(404, f"{name} is not in this run's workspace")
+    try:
+        return workspace_manager.search(texts, q, name=name, regex=regex, case_sensitive=case)
+    except WorkspaceError as exc:
+        _fail(exc)
 
 
 # --------------------------------------------------------------------------- planning a change
@@ -213,6 +271,129 @@ async def apply(run_id: str, body: ApplyIn, request: Request, background: Backgr
     background.add_task(runner.workspace_apply_pipeline, request.app.state, run_id, changes,
                         (body.request or "").strip())
     return run_out(await own_run(db, run_id, user))
+
+
+# --------------------------------------------------------------------------- editing workspace files
+#
+# These four routes are the IDE's own writes. They differ from `/apply` in exactly one way: they move
+# the file set without touching `index.html`, so there is nothing to sanitize, republish or re-check in
+# Chromium, and no revision is spent. Everything else is the same discipline - the run must be owned by
+# the caller, the crew must not be mid-write, the whole file set is snapshotted before the first byte
+# changes, and the result comes back as it is stored rather than as the browser remembered it.
+#
+# What is written here is never executed. Source files are stored, listed, diffed, served back and put
+# in the download bundle; running them needs the sandbox this deployment does not have (see `/run`).
+
+async def _idle_ctx(request: Request, db, run_id: str, user):
+    """The run at rest: owned, not mid-pipeline, with a workspace to edit."""
+    run = await own_run(db, run_id, user)
+    if run["status"] in BUSY:
+        raise HTTPException(409, f"The crew is {run['status']} on this run right now. Wait for it to "
+                                 f"return to the approval gate before editing files.")
+    return await _ctx(request, db, run_id, user)
+
+
+async def _store_files(db, run_id: str, ctx, *, action: str, name: str) -> None:
+    """Persist only the state a file operation moved, then put the same fact on the run's event feed."""
+    await db.runs.update_one({"_id": oid(run_id)}, {"$set": {
+        "state.files": ctx.state.files,
+        "state.authored_files": ctx.state.authored_files,
+        "state.workspace_versions": ctx.state.workspace_versions,
+        "state.undo_stack": ctx.state.undo_stack,
+        "state.redo_stack": ctx.state.redo_stack,
+        "updated_at": runner.now()}})
+    await ctx.emit("workspace_files", action=action, file=name, version=ctx.state.html_version,
+                   files=[f["name"] for f in (ctx.state.files or [])])
+
+
+@router.get("/files/{name}")
+async def read_file(run_id: str, name: str, request: Request, db=Depends(get_db),
+                    user=Depends(get_current_user)):
+    """One file's text with the metadata the editor needs: its digest, kind and whether it may be saved.
+
+    The digest is the `base_hash` to send back on a save, which is what turns a save that races another
+    writer into a refused request instead of a lost one.
+    """
+    ctx = await _ctx(request, db, run_id, user)
+    try:
+        cleaned = workspace_manager.validate_name(name)
+    except WorkspaceError as exc:
+        _fail(exc)
+    entry = next((f for f in (ctx.state.files or []) if f["name"] == cleaned), None)
+    if not entry:
+        raise HTTPException(404, f"{cleaned} is not in this run's workspace")
+    try:
+        data = await ctx.storage.load(entry["key"])
+    except Exception as exc:  # noqa: BLE001 - a lost blob is a 404, never a 500
+        _fail(WorkspaceError(f"{cleaned} could not be read from storage: {exc}", 404))
+    described = workspace_manager.describe_file(ctx.state, entry)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return {"name": cleaned, "binary": True, "bytes": len(data), "hash": workspace_manager.digest(data),
+                **described, "text": None,
+                "why": "This file is not valid UTF-8 text, so the editor cannot open it. Download it "
+                       "from the bundle instead."}
+    return {"name": cleaned, "text": text, "bytes": len(data),
+            "hash": workspace_manager.digest(data), "truncated": False, **described}
+
+
+@router.post("/files")
+async def create_file(run_id: str, body: FileCreateIn, request: Request, db=Depends(get_db),
+                      user=Depends(get_current_user)):
+    """Add a source file beside the page. The state before it becomes the undo step."""
+    ctx = await _idle_ctx(request, db, run_id, user)
+    try:
+        result = await workspace_manager.create_file(ctx, body.name, body.text, note=body.note)
+    except WorkspaceError as exc:
+        _fail(exc)
+    await _store_files(db, run_id, ctx, action="create", name=result["file"]["name"])
+    return result
+
+
+@router.put("/files/{name}")
+async def save_file(run_id: str, name: str, body: FileSaveIn, request: Request, db=Depends(get_db),
+                    user=Depends(get_current_user)):
+    """Store one source file exactly as the editor holds it.
+
+    `index.html`, `styles.css`, `app.js` and `README.md` are refused here with a 409 pointing at `/plan`
+    and `/apply`: a page edit has to go through the sanitizer and the browser checks, and this route
+    would report success for bytes the next publish would overwrite.
+    """
+    ctx = await _idle_ctx(request, db, run_id, user)
+    try:
+        result = await workspace_manager.save_file(ctx, name, body.text, base_hash=body.base_hash,
+                                                   note=body.note)
+    except WorkspaceError as exc:
+        _fail(exc)
+    await _store_files(db, run_id, ctx, action="save", name=name)
+    return result
+
+
+@router.patch("/files/{name}")
+async def rename_file(run_id: str, name: str, body: FileRenameIn, request: Request, db=Depends(get_db),
+                      user=Depends(get_current_user)):
+    """Move a source file to a new name, keeping its bytes and the undo that returns the old name."""
+    ctx = await _idle_ctx(request, db, run_id, user)
+    try:
+        result = await workspace_manager.rename_file(ctx, name, body.name)
+    except WorkspaceError as exc:
+        _fail(exc)
+    await _store_files(db, run_id, ctx, action="rename", name=result["to"])
+    return result
+
+
+@router.delete("/files/{name}")
+async def delete_file(run_id: str, name: str, request: Request, db=Depends(get_db),
+                      user=Depends(get_current_user)):
+    """Take a source file out of the workspace. The snapshot taken first is what makes it undoable."""
+    ctx = await _idle_ctx(request, db, run_id, user)
+    try:
+        result = await workspace_manager.delete_file(ctx, name)
+    except WorkspaceError as exc:
+        _fail(exc)
+    await _store_files(db, run_id, ctx, action="delete", name=result["deleted"])
+    return result
 
 
 # --------------------------------------------------------------------------- snapshots
@@ -388,3 +569,69 @@ async def restore(run_id: str, body: RestoreIn, request: Request, background: Ba
         raise HTTPException(409, "Run is not awaiting approval")
     background.add_task(runner.workspace_restore_pipeline, request.app.state, run_id, body.w)
     return run_out(await own_run(db, run_id, user))
+
+
+# --------------------------------------------------------------------------- running project code
+#
+# The IDE's Run button needs a truthful answer, and this backend does not have one to give: nothing here
+# executes workspace files. `testgen.execute()` runs a fixed generated suite in a temp directory, which is
+# a check of the page, not a general-purpose interpreter. So the routes report the gap in the same words
+# every client sees, instead of the frontend inventing output or a terminal printing something canned.
+
+EXEC_MISSING = [
+    "An isolated runtime for generated code: a container or sandbox per run, with no host filesystem, no "
+    "service credentials and no Docker socket mounted.",
+    "A resource policy the runtime enforces - CPU and memory ceilings, an output cap, a wall-clock kill, "
+    "and no outbound network unless a run asks for it explicitly.",
+    "A process outside the FastAPI worker to hold the session, so a runaway script cannot take the API down "
+    "with it, plus a stream endpoint that forwards real stdout/stderr and accepts cancellation.",
+]
+
+
+@router.get("/exec")
+async def exec_capability(run_id: str, db=Depends(get_db), settings=Depends(get_settings_dep),
+                          user=Depends(get_current_user)):
+    """Whether this deployment can run a project's code, and precisely what it would need first."""
+    await own_run(db, run_id, user)
+    runtime = (settings.sandbox_runtime or "").strip()
+    found = bool(shutil.which(runtime)) if runtime else False
+    if not runtime:
+        detail = "No execution runtime is configured (SANDBOX_RUNTIME is empty)."
+    elif not found:
+        detail = f"The configured runtime {runtime!r} is not installed on this host."
+    else:
+        detail = (f"{runtime} is installed, but this backend has no runner that would start a sandboxed "
+                  f"process from it - the command would run in the API's own environment, which is the one "
+                  f"thing generated code must never get.")
+    return {"available": False, "runtime": runtime, "runtime_found": found,
+            "reason": "Project execution is not implemented in this backend. " + detail,
+            "missing": EXEC_MISSING,
+            "configuration": {"SANDBOX_RUNTIME": runtime,
+                              "note": "The only execution setting this backend reads. Setting it names a "
+                                      "runtime for the status report above; it does not make Run work, "
+                                      "because no runner is wired to it yet."},
+            "safe_alternatives": [
+                "Preview the page: the published index.html runs in the browser through the sandboxed "
+                "preview ticket, which is real execution of the front end.",
+                "Run the generated test suite: it is executed here, in a throwaway directory, with a "
+                "timeout, and reports pass/fail per case.",
+                "Download the workspace as a file bundle and run the source on your own machine.",
+            ]}
+
+
+@router.post("/exec")
+async def exec_run(run_id: str, body: ExecIn, db=Depends(get_db), user=Depends(get_current_user)):
+    """Refused on purpose: with no sandbox to run in, the honest answer is 501, not invented output.
+
+    The command is validated before the refusal so a client gets the real reason for its own bad request,
+    and so this route cannot be turned into anything else by a future change of mind.
+    """
+    await own_run(db, run_id, user)
+    if body.file:
+        try:
+            workspace_manager.validate_name(body.file)
+        except WorkspaceError as exc:
+            _fail(exc)
+    raise HTTPException(501, "This deployment cannot run project code: no isolated execution environment "
+                             "is wired up. Use the preview, the generated tests, or download the files - "
+                             "GET /workspace/exec lists the infrastructure that would make Run work.")

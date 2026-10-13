@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api";
 import EmptyState from "../components/EmptyState";
@@ -13,7 +13,7 @@ import { useToast } from "../toast";
 
 // The same limits app/agents/schemas.py SiteSpec enforces, so the wizard refuses what the API would
 // refuse instead of letting a run die on a 422 after the user has filled in six steps.
-const LIMITS = { idea: 500, audience: 160, tone: 120, features: 10, pages: 8, sections: 5, compare: 4,
+const LIMITS = { idea: 500, audience: 160, tone: 120, features: 10, pages: 8, sections: 12, compare: 4,
                  feature_keys: 16 };
 const PAGE_SLUG = /^[a-z0-9][a-z0-9-]{0,23}$/;
 const HEX = /^#[0-9a-f]{6}$/;
@@ -34,12 +34,17 @@ const STEPS = [
 const STEP_KEYS = [["idea"], ["type"], ["audience", "tone"], ["features", "pages", "sections", "feature_keys"], ["style", "color", "theme"], []];
 
 const EMPTY = { idea: "", business_type: "other", audience: "", tone: "", features: [], pages: [],
-                sections: [], style: "", color: "", mode: "single", compare: [], theme: null, feature_keys: [] };
+                sections: [], style: "", color: "", mode: "single", compare: [], theme: null, feature_keys: [],
+                template: "" };
 
 function loadDraft(params) {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(DRAFT_KEY) || "{}") || {}; } catch { saved = {}; }
   const d = { ...EMPTY, ...saved };
+  // A template card hands over its key; the brief it stands for is read back from the registry below
+  // rather than passed through the URL, so a card cannot prefill a composition the builder no longer has.
+  const template = params.get("template");
+  if (template) d.template = template;
   // A template or dashboard link can prefill the brief; what it passes wins over the stored draft.
   for (const key of ["idea", "business_type", "audience", "tone", "style", "color"]) {
     const fromUrl = params.get(key === "business_type" ? "business" : key);
@@ -112,6 +117,8 @@ export default function NewProject() {
   const [themeNote, setThemeNote] = useState("");     // what happened to a theme handed over by id
   const [caps, setCaps] = useState(null);             // the feature catalog; null until the API answers
   const [capErr, setCapErr] = useState("");           // why no feature could be offered
+  const [templateNote, setTemplateNote] = useState("");  // what happened to a card handed over by key
+  const appliedTemplate = useRef("");
   const { start, busy: starting } = useStartRun();
 
   const set = useCallback((patch) => setDraft((d) => ({ ...d, ...patch })), []);
@@ -121,7 +128,7 @@ export default function NewProject() {
     business_type: draft.business_type, audience: draft.audience.trim(), pages: draft.pages,
     style: draft.mode === "compare" ? "" : draft.style, color: draft.color.trim().toLowerCase(),
     features: draft.features, tone: draft.tone.trim(), sections: draft.sections,
-    theme: draft.theme?.controls || {},
+    theme: draft.theme?.controls || {}, template: draft.template,
   }), [draft]);
   const errors = useMemo(() => briefErrors(draft, reg, themes), [draft, reg, themes]);
   const stepBad = (i) => STEP_KEYS[i].some((k) => errors[k]);
@@ -169,6 +176,30 @@ export default function NewProject() {
       setThemeNote("That theme is no longer in your library, so this brief will use the style's own palette.");
     }
   }, [themes, draft.theme, set]);
+
+  // A gallery card arrives as a key, the same way a Design System card arrives as an id: the brief it
+  // stands for is read back from the registry, so the wizard cannot prefill a composition the builder no
+  // longer has. Applied once - after that the owner's edits are the brief, not the card.
+  useEffect(() => {
+    const key = params.get("template");
+    if (!key || appliedTemplate.current === key) return undefined;
+    appliedTemplate.current = key;
+    let dead = false;
+    api.templateDetail(key).then((d) => {
+      if (dead) return;
+      const s = d.spec;
+      set({ idea: d.template.idea, business_type: s.business_type, audience: s.audience, tone: s.tone,
+            features: s.features, pages: s.pages, sections: s.sections.slice(0, LIMITS.sections),
+            style: s.style, color: s.color, feature_keys: s.feature_keys, template: s.template });
+      setTemplateNote(`${d.template.label} loaded from the gallery. Every step is still yours to change.`);
+    }).catch((e) => {
+      if (dead) return;
+      appliedTemplate.current = "";
+      set({ template: "" });
+      setTemplateNote(`${e.message} - this brief starts empty instead.`);
+    });
+    return () => { dead = true; };
+  }, [params, set]);
 
   useEffect(() => {
     try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...draft, mode })); } catch { /* storage full or blocked */ }
@@ -231,6 +262,8 @@ export default function NewProject() {
     setMode("single");
     setTried(false);
     setStep(0);
+    appliedTemplate.current = "";
+    setTemplateNote("");
     try { localStorage.removeItem(DRAFT_KEY); } catch { /* nothing to clean */ }
     toast("Draft cleared.", "success");
   };
@@ -257,6 +290,12 @@ export default function NewProject() {
         </div>
         <Link to="/templates" className="btn ghost"><Icon name="sparkle" size={15} /> Start from a template</Link>
       </div>
+
+      {templateNote && (
+        <div className="card" role="status">
+          <span className="muted small">{templateNote}</span>
+        </div>
+      )}
 
       {restored && draft.idea.trim() && (
         <div className="card" role="status">

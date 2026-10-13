@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 
 from app.agents.base import looks_like_html
 from app.orchestrator import artifacts
@@ -38,8 +39,11 @@ ALLOWED_EXTENSIONS = {"html", "htm", "css", "js", "mjs", "md", "py", "json", "tx
 OPS = ("replace", "replace_all", "append", "set")
 
 # The kinds of change that get a checkpoint, so history says who moved the workspace and why.
+# The last three are the editor's own file operations: they move the file set without touching the page,
+# so they earn an undo step but never a rebuild.
 CAUSE_KINDS = ("crew rebuild", "file patch", "workspace restore", "version restore", "manual checkpoint",
-               "visual edit", "theme edit", "feature build", "unattributed")
+               "visual edit", "theme edit", "feature build", "file create", "file rename", "file delete",
+               "unattributed")
 
 # Files the crew rewrites itself: patching them here would be undone by the next build.
 GENERATED_ONLY = {"README.md"}
@@ -544,6 +548,11 @@ def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:12]
 
 
+def digest(data: bytes) -> str:
+    """The public reading of a stored file's identity: the hash the editor sends back on a save."""
+    return _digest(data)
+
+
 def find_snapshot(versions: list[dict], w: int) -> dict:
     """One snapshot record out of a state's list, by its number."""
     entry = next((v for v in versions or [] if v.get("w") == w), None)
@@ -669,3 +678,284 @@ def summarise_index(index: dict) -> dict:
                        "refs": f.get("refs", 0), "reason": f.get("reason", "")}
                       for f in index.get("files") or []],
             "names": sorted({s["name"] for s in index.get("symbols") or []})[:200]}
+
+
+# ------------------------------------------------------------------ the editor's own file operations
+#
+# A workspace is a flat set of bare names, and that is a property of the build rather than a shortcut:
+# `index.html` is the document the preview, share link and deploy read, and `styles.css` / `app.js` /
+# `README.md` are rebuilt from it. A name with a directory in it would describe a file the single-file
+# deploy cannot ship, so these operations keep `validate_name` exactly as the patch path enforces it.
+#
+# Nothing here runs anything. An authored file is stored, listed, snapshotted and served back; the backend
+# never imports or executes it (see `stage_authored`). Saving one moves the file set and earns an undo
+# step, and deliberately does not rebuild the page: the page was not touched, so a publish would be a
+# claim about a change that did not happen.
+
+KIND_PAGE = "page"
+KIND_DERIVED = "derived"
+KIND_GENERATED = "generated"
+KIND_SOURCE = "source"
+
+# How a file of each kind is written, so the editor asks for the right operation instead of guessing:
+# "apply" is a patch through the publish path (snapshot, sanitizer, Chromium re-check), "save" writes the
+# bytes as they stand, and None means the file cannot be written at all.
+SAVE_VIA = {KIND_PAGE: "apply", KIND_DERIVED: "apply", KIND_SOURCE: "save", KIND_GENERATED: None}
+KIND_WHY = {
+    KIND_PAGE: "The canonical document: a save here is snapshotted, sanitized, republished and re-checked.",
+    KIND_DERIVED: "Rebuilt from the page's own <style> / <script> block, so a save is folded back into "
+                  "index.html and travels with the deploy.",
+    KIND_GENERATED: "Written by the crew on every build, so an edit here would be undone by the next "
+                    "publish. Change the page or the brief instead.",
+    KIND_SOURCE: "Source that ships beside the page: stored exactly as written, never executed here, and "
+                 "kept through a rebuild.",
+}
+
+SEARCH_MAX_QUERY = 200
+SEARCH_MAX_MATCHES = 200
+SEARCH_MAX_LINE_CHARS = 240
+# A caller-supplied regular expression can cost more than the text it scans, so a search stops on the
+# clock as well as on the match count and says that it stopped.
+SEARCH_TIME_S = 2.0
+
+
+def file_kind(name: str) -> str:
+    """Which of the four roles a workspace file plays, from its name alone."""
+    if name == "index.html":
+        return KIND_PAGE
+    if name in ("styles.css", "app.js"):
+        return KIND_DERIVED
+    return KIND_SOURCE
+
+
+def _owned_names(state) -> list[dict]:
+    """The authored entries of a state, whether it is a RunState or the run document's stored dict."""
+    if isinstance(state, dict):
+        return state.get("authored_files") or []
+    return state.authored_files or []
+
+
+def _listed_files(state) -> list[dict]:
+    if isinstance(state, dict):
+        return state.get("files") or []
+    return state.files or []
+
+
+def describe_file(state, entry: dict) -> dict:
+    """One file as the editor needs to see it: what it is, whether it can be written, and how."""
+    name = entry.get("name") or ""
+    kind = file_kind(name)
+    if kind == KIND_SOURCE and not any(f.get("name") == name for f in _owned_names(state)):
+        # Listed but not authored and not one of the four names above: it came out of a build, so the
+        # build owns it. Saying so is better than offering a save the next publish would quietly drop.
+        kind = KIND_GENERATED
+    return {"name": name, "language": entry.get("language") or codebase_index.language_of(name),
+            "bytes": entry.get("bytes", 0), "note": entry.get("note") or "", "kind": kind,
+            "save_via": SAVE_VIA[kind], "editable": SAVE_VIA[kind] is not None, "why": KIND_WHY[kind]}
+
+
+def describe_workspace(state) -> list[dict]:
+    """The file set in the order it was published: the page, its assets, then the source beside them.
+
+    `publish` already writes `files` in that order, so the editor shows what the build means without a
+    second sort - and a workspace that gained an authored file keeps the listing its page view has
+    always had instead of getting an alphabetical one.
+    """
+    return [describe_file(state, f) for f in _listed_files(state)]
+
+
+def authored_entry(state, name: str) -> dict:
+    """The recorded entry for a file only the editor owns, with the refusal that says who owns the rest."""
+    entry = next((f for f in _owned_names(state) if f.get("name") == name), None)
+    if not entry:
+        raise WorkspaceError(
+            f"{name} is not editor or feature source. index.html, styles.css, app.js and README.md are "
+            f"published from the page, so write them through the change set (op 'set') and the patch is "
+            f"folded back, sanitized and re-checked like any other edit.", 409)
+    return entry
+
+
+def encode_text(text: str, name: str) -> bytes:
+    """Strict UTF-8 with the failure named: a file that cannot be stored whole must not be stored partly."""
+    try:
+        data = (text or "").encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise WorkspaceError(f"{name} cannot be stored: it contains a character that is not valid UTF-8 "
+                             f"({exc.reason}). Replace it and save again.") from exc
+    if len(data) > MAX_WORKSPACE_FILE_BYTES:
+        raise WorkspaceError(f"{name} is {len(data)} bytes, over the {MAX_WORKSPACE_FILE_BYTES} a "
+                             f"workspace file may hold and stay indexable")
+    return data
+
+
+async def _step(ctx, *, changed: list[str], note: str, kind: str) -> dict:
+    """Snapshot the file set as it stands, then mark that snapshot as the step back."""
+    snap = await capture(ctx, note=note, changed=changed,
+                         cause={"kind": kind, "agent": "user", "run_id": ctx.run_id,
+                                "version": ctx.state.html_version})
+    record_change(ctx.state, snap["w"])
+    return snap
+
+
+async def create_file(ctx, name: str, text: str, *, note: str = "") -> dict:
+    """Write a new source file beside the page, with the state before it as the undo step."""
+    s = ctx.state
+    cleaned = validate_name(name)
+    if file_kind(cleaned) != KIND_SOURCE or cleaned in DERIVED_NAMES:
+        # One of the page's own four names: "pick another name" would be the wrong advice to give, so this
+        # asks the ownership question first and gets the answer that names the patch path.
+        authored_entry(s, cleaned)
+    if any(f.get("name") == cleaned for f in (s.files or [])):
+        raise WorkspaceError(f"{cleaned} already exists in this workspace. Open it and save over it, or "
+                             f"give the new file another name.", 409)
+    staged = await stage_authored(ctx, [{"name": cleaned, "text": text,
+                                         "note": note or "Written in the editor.", "source": "editor"}])
+    snap = await _step(ctx, changed=[cleaned], note=f"Before creating {cleaned}", kind="file create")
+    register_authored(s, staged)
+    return {"file": staged[0], "snapshot": snap["w"], "undo": undo_status(s),
+            "files": describe_workspace(s)}
+
+
+async def save_file(ctx, name: str, text: str, *, base_hash: str = "", note: str = "") -> dict:
+    """Store a source file exactly as the editor holds it.
+
+    `base_hash` is the digest the editor read. Sending it back means a save that races another writer -
+    a second tab, a feature build, an undo - is refused instead of landing on bytes nobody looked at.
+    """
+    s = ctx.state
+    cleaned = validate_name(name)
+    entry = authored_entry(s, cleaned)
+    data = encode_text(text, cleaned)
+    if not data.strip():
+        raise WorkspaceError(f"{cleaned}: refusing to save an empty file. Delete it instead, or keep its "
+                             f"contents.")
+    try:
+        current = await ctx.storage.load(entry["key"])
+    except Exception as exc:  # noqa: BLE001 - a lost blob is a 404, never a silent rewrite
+        raise WorkspaceError(f"{cleaned} could not be read from storage before saving over it: {exc}", 404)
+    if base_hash and base_hash != _digest(current):
+        raise WorkspaceError(f"Conflict: {cleaned} changed since this file was opened "
+                             f"(read {base_hash[:8]}, now {_digest(current)[:8]}). Reload it before saving, "
+                             f"or the newer bytes are lost.", 409)
+    snap = await _step(ctx, changed=[cleaned], note=f"Before saving {cleaned}", kind="file patch")
+    key = await ctx.storage.save(ctx.run_id, cleaned, data)
+    update = {"key": key, "bytes": len(data)}
+    if note:
+        update["note"] = note[:160]
+    for row in (s.authored_files or []):
+        if row.get("name") == cleaned:
+            row.update(update)
+    for row in (s.files or []):
+        if row.get("name") == cleaned:
+            row.update(update)
+    return {"file": describe_file(s, entry), "bytes": len(data), "hash": _digest(data),
+            "snapshot": snap["w"], "undo": undo_status(s), "files": describe_workspace(s)}
+
+
+async def rename_file(ctx, old: str, new: str) -> dict:
+    """Move a source file to a new name and keep its bytes, so the undo returns the old name."""
+    s = ctx.state
+    src, dst = validate_name(old), validate_name(new)
+    if src == dst:
+        raise WorkspaceError("The new name is the one it already has")
+    entry = authored_entry(s, src)
+    if any(f.get("name") == dst for f in (s.files or [])):
+        raise WorkspaceError(f"{dst} already exists in this workspace; one file can hold that name", 409)
+    try:
+        data = await ctx.storage.load(entry["key"])
+    except Exception as exc:  # noqa: BLE001
+        raise WorkspaceError(f"{src} could not be read from storage: {exc}", 404) from exc
+    snap = await _step(ctx, changed=[src, dst], note=f"Before renaming {src}", kind="file rename")
+    key = await ctx.storage.save(ctx.run_id, dst, data)
+    moved = {**entry, "name": dst, "key": key, "bytes": len(data),
+             "language": codebase_index.language_of(dst),
+             "note": (entry.get("note") or "")[:160], "source": entry.get("source") or "editor"}
+    s.authored_files = [moved if f.get("name") == src else f for f in (s.authored_files or [])]
+    s.files = [moved if f.get("name") == src else f for f in (s.files or [])]
+    try:  # the snapshot already holds the old bytes under its own key, so this is cleanup, not safety
+        await ctx.storage.delete(entry["key"])
+    except Exception:  # noqa: BLE001 - a stray blob must never fail a rename
+        pass
+    return {"from": src, "to": dst, "snapshot": snap["w"], "undo": undo_status(s),
+            "files": describe_workspace(s)}
+
+
+async def delete_file(ctx, name: str) -> dict:
+    """Take a source file out of the workspace. The page is untouched, so nothing is rebuilt.
+
+    Only editor-owned files may be deleted: `index.html` and the assets built from it are what the
+    preview, share link and deploy read, and removing one of those is a change to the page, not the file
+    set - it belongs on the patch path where the sanitizer and the checks can see it.
+    """
+    s = ctx.state
+    cleaned = validate_name(name)
+    entry = authored_entry(s, cleaned)
+    snap = await _step(ctx, changed=[cleaned], note=f"Before deleting {cleaned}", kind="file delete")
+    s.authored_files = [f for f in (s.authored_files or []) if f.get("name") != cleaned]
+    s.files = [f for f in (s.files or []) if f.get("name") != cleaned]
+    try:
+        await ctx.storage.delete(entry["key"])
+    except Exception:  # noqa: BLE001 - the listing is the promise; the blob is best-effort cleanup
+        pass
+    return {"deleted": cleaned, "snapshot": snap["w"], "undo": undo_status(s),
+            "files": describe_workspace(s)}
+
+
+# ------------------------------------------------------------------ searching the workspace
+def _clip_line(line: str) -> str:
+    flat = line.strip()
+    return (flat[:SEARCH_MAX_LINE_CHARS] + "...") if len(flat) > SEARCH_MAX_LINE_CHARS else flat
+
+
+def search(texts: dict[str, str], query: str, *, name: str | None = None, regex: bool = False,
+           case_sensitive: bool = False) -> dict:
+    """Find a phrase or a pattern in the files as they are stored now: no model, no writes, no guessing.
+
+    The scan is bounded on matches, on wall-clock and on file size, and every bound it hits is reported.
+    A search that says "stopped at 200 matches" is useful; one that quietly returns a tenth of the answer
+    is how a reviewer concludes a file is clean when it is not.
+    """
+    q = (query or "")[:SEARCH_MAX_QUERY]
+    if not q.strip():
+        raise WorkspaceError("Type something to search for")
+    try:
+        pattern = re.compile(q if regex else re.escape(q), 0 if case_sensitive else re.IGNORECASE)
+    except re.error as exc:
+        raise WorkspaceError(f"That regular expression does not compile: {exc}") from exc
+
+    started, matches, files, skipped, truncated, reason = time.monotonic(), [], [], [], False, ""
+    scanned = 0
+    ordered = sorted(texts, key=lambda n: (n != "index.html", n))
+    for fname in ordered:
+        if name and fname != name:
+            continue
+        scanned += 1
+        text = texts[fname]
+        if len(text.encode("utf-8", "ignore")) > MAX_WORKSPACE_FILE_BYTES:
+            skipped.append({"file": fname, "reason": f"over the {MAX_WORKSPACE_FILE_BYTES} byte cap"})
+            continue
+        hits = 0
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            for found in pattern.finditer(line):
+                matches.append({"file": fname, "line": line_no, "column": found.start() + 1,
+                                "length": max(1, found.end() - found.start()), "text": _clip_line(line)})
+                hits += 1
+                if len(matches) >= SEARCH_MAX_MATCHES:
+                    truncated, reason = True, f"{SEARCH_MAX_MATCHES} matches"
+                    break
+            if truncated:
+                break
+        if hits:
+            files.append({"file": fname, "matches": hits})
+        if truncated:
+            break
+        if time.monotonic() - started > SEARCH_TIME_S:
+            truncated, reason = True, f"stopped after {SEARCH_TIME_S}s to keep the request bounded"
+            break
+    return {"query": q, "regex": regex, "case_sensitive": case_sensitive, "scope": name or "all files",
+            "matches": matches, "files": files, "counts": {"matches": len(matches),
+                                                           "files": len(files), "scanned": scanned},
+            "skipped": skipped, "truncated": truncated, "reason": reason,
+            "limits": {"max_query": SEARCH_MAX_QUERY, "max_matches": SEARCH_MAX_MATCHES,
+                       "max_line_chars": SEARCH_MAX_LINE_CHARS, "time_s": SEARCH_TIME_S}}
+

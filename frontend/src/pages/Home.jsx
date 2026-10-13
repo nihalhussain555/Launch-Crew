@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import Icon from "../components/Icon";
-import { TEMPLATES, catIcon } from "../constants";
-import { slugify } from "../utils";
+import { catIcon } from "../constants";
+import { useTemplates } from "../hooks/useTemplates";
 
 const CAPS = [
   { icon: "cpu", title: "AI Agents", text: "A crew of specialist agents research, position, write, design and engineer your page." },
@@ -29,6 +29,7 @@ const FEATURES = [
 ];
 
 export default function Home() {
+  const { catalog } = useTemplates();                 // the gallery needs a session; the page does not
   return (
     <>
       <section className="hero anim-up">
@@ -98,21 +99,32 @@ export default function Home() {
       </section>
 
       <section className="section" id="templates">
-        <div className="section-head"><h2>Start from a template</h2><p>Professionally crafted starting points across categories.</p></div>
-        <div className="tpl-preview">
-          {TEMPLATES.slice(0, 6).map((t) => (
-            <Link to={`/templates/${slugify(t.title)}`} className="tpl-mini" key={t.title}>
-              <div className="tpl-top">
-                <span className="cap-ico" aria-hidden="true"><Icon name={catIcon(t.cat)} size={19} /></span>
-                <span className="pill">{t.cat}</span>
-              </div>
-              <strong>{t.title}</strong>
-              <span className="muted clamp">{t.idea}</span>
-              <span className="chip">View details <Icon name="arrowRight" size={13} /></span>
-            </Link>
-          ))}
-        </div>
-        <div className="section-cta-row"><Link to="/templates" className="btn ghost">View all templates <Icon name="arrowRight" size={16} /></Link></div>
+        <div className="section-head"><h2>Start from a template</h2>
+          <p>Professionally shaped briefs across six categories — each card is the brief a run really builds from.</p></div>
+        {catalog ? (
+          <>
+            <div className="tpl-preview">
+              {catalog.templates.slice(0, 6).map((t, i) => (
+                <Link to={`/templates/${t.key}`} className="tpl-mini" key={t.key}>
+                  <div className="tpl-top">
+                    <span className="cap-ico" aria-hidden="true"><Icon name={catIcon(t.category)} size={19} /></span>
+                    <span className="tpl-num" aria-hidden="true">{String(i + 1).padStart(2, "0")}</span>
+                  </div>
+                  <strong>{t.label}</strong>
+                  <span className="muted clamp">{t.summary}</span>
+                  <span className="chip">View details <Icon name="arrowRight" size={13} /></span>
+                </Link>
+              ))}
+            </div>
+            <div className="section-cta-row"><Link to="/templates" className="btn ghost">View all templates <Icon name="arrowRight" size={16} /></Link></div>
+          </>
+        ) : (
+          <div className="card">
+            <p className="muted">The gallery is served from the template registry once you are signed in —
+              browse it, read what each card still needs from you, and launch one.</p>
+            <div className="section-cta-row"><Link to="/register" className="btn ghost">Create a free account <Icon name="arrowRight" size={16} /></Link></div>
+          </div>
+        )}
       </section>
 
       <section className="cta-band">

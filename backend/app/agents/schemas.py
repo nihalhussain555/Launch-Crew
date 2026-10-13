@@ -53,14 +53,21 @@ def brief_line(spec: dict | None) -> str:
     fields defensively instead of rebuilding `SiteSpec`.
     """
     from app.agents import styles as design_styles
+    from app.agents import templates as site_templates
 
     if not isinstance(spec, dict):
         return ""
     style = design_styles.get(_text(spec, "style").lower())
     business = design_styles.BUSINESS_BY_KEY.get(_text(spec, "business_type").lower())
+    template = site_templates.get(_text(spec, "template").lower())
     bits = []
+    if template:
+        # Names the shape the owner chose, so the copy is written for that trade rather than a generic site.
+        bits.append(f"site template: {template.label} ({template.industries_line()})")
     if business:
-        bits.append(f"business type: {business.label}")
+        # The key travels with the label: the offline builder names its sections after the trade
+        # ("Menu" for a café, "Courses" for a school), and it needs the stable id to do that.
+        bits.append(f"business type: {business.label} ({business.key})")
     bits.append(f"design style: {style.label} ({style.key})" if style
                 else "design style: the crew's choice for this idea")
     for label, limit in (("audience", 160), ("tone", 120)):
@@ -101,7 +108,11 @@ class SiteSpec(BaseModel):
     color: str = Field(default="", max_length=9)
     features: Annotated[list[str], _trim(10)] = Field(default_factory=list)
     tone: str = Field(default="", max_length=120)
-    sections: Annotated[list[str], _trim(5)] = Field(default_factory=list)
+    sections: Annotated[list[str], _trim(12)] = Field(default_factory=list)
+    # The gallery card a brief started from. It carries no behaviour of its own: every field a template
+    # knows about (style, sections, features, pages) arrives with the brief, so this is provenance the
+    # run can name, not a second source of layout decisions.
+    template: str = Field(default="", max_length=40)
     theme: dict = Field(default_factory=dict)
     # The catalog keys the wizard ticked. The page the crew generates is not built from them - a feature
     # is written into an existing page, through the reviewable build in the workspace - so the brief only
@@ -116,10 +127,18 @@ class SiteSpec(BaseModel):
         from app.agents import theme as design_theme
         return design_theme.as_stored(design_theme.resolve(v)) if isinstance(v, dict) and v else {}
 
-    @field_validator("business_type", "style", "color", mode="before")
+    @field_validator("business_type", "style", "color", "template", mode="before")
     @classmethod
     def _clean(cls, v):
         return str(v or "").strip().lower()
+
+    @field_validator("template")
+    @classmethod
+    def _template(cls, v: str) -> str:
+        from app.agents import templates as site_templates
+        if v and site_templates.get(v) is None:
+            raise ValueError(f"unknown template '{v}' - choose one of {', '.join(site_templates.keys())}")
+        return v
 
     @field_validator("business_type")
     @classmethod
@@ -262,6 +281,133 @@ class ContactInfo(BaseModel):
         return v
 
 
+# ---- The content blocks a professional site is made of.
+# Each carries `sample` like the sections above: a founded year, an opening-hours row or a client name
+# the crew guessed is marked as a guess, and the builder prints that out on the page.
+class FactRow(BaseModel):
+    label: str = Field(max_length=40)
+    value: str = Field(max_length=80)
+
+
+class AboutDoc(BaseModel):
+    intro: str = Field(default="", max_length=400)
+    facts: Annotated[list[FactRow], _trim(4)] = Field(default_factory=list)
+    credentials: Annotated[list[str], _trim(5)] = Field(default_factory=list)
+    sample: bool = True
+
+
+class Stat(BaseModel):
+    value: str = Field(max_length=24)
+    label: str = Field(max_length=50)
+    sample: bool = True
+
+
+class SkillGroup(BaseModel):
+    group: str = Field(max_length=40)
+    items: Annotated[list[str], _trim(6)] = Field(default_factory=list)
+    sample: bool = True
+
+
+class Service(BaseModel):
+    name: str = Field(max_length=60)
+    description: str = Field(default="", max_length=200)
+    detail: str = Field(default="", max_length=48)     # a lead time or a "from" price, never a bare number
+    sample: bool = True
+
+
+class CaseStudy(BaseModel):
+    client: str = Field(max_length=60)
+    sector: str = Field(default="", max_length=40)
+    title: str = Field(max_length=80)
+    outcome: str = Field(default="", max_length=220)
+    metric: str = Field(default="", max_length=48)
+    sample: bool = True
+
+
+class CatalogItem(BaseModel):
+    name: str = Field(max_length=70)
+    note: str = Field(default="", max_length=180)
+    price: str = Field(default="", max_length=40)
+    tag: str = Field(default="", max_length=32)
+    specs: Annotated[list[str], _trim(3)] = Field(default_factory=list)
+    sample: bool = True
+
+
+DEVICES = ("window", "phone")
+
+
+class PreviewDoc(BaseModel):
+    title: str = Field(default="", max_length=60)
+    caption: str = Field(default="", max_length=200)
+    points: Annotated[list[str], _trim(4)] = Field(default_factory=list)
+    device: str = Field(default="window", max_length=12)
+    sample: bool = True
+
+    @field_validator("device")
+    @classmethod
+    def _device(cls, v: str) -> str:
+        if v not in DEVICES:
+            raise ValueError(f"preview device must be one of {', '.join(DEVICES)}")
+        return v
+
+
+class TimelineEntry(BaseModel):
+    when: str = Field(max_length=36)
+    title: str = Field(max_length=70)
+    note: str = Field(default="", max_length=180)
+    place: str = Field(default="", max_length=48)
+    sample: bool = True
+
+
+class HoursRow(BaseModel):
+    days: str = Field(max_length=32)
+    time: str = Field(max_length=40)
+
+
+class VisitDoc(BaseModel):
+    address: str = Field(default="", max_length=160)
+    hours: Annotated[list[HoursRow], _trim(6)] = Field(default_factory=list)
+    getting_here: str = Field(default="", max_length=180)
+    sample: bool = True
+
+
+BOOKING_KINDS = ("appointment", "reservation", "consultation", "registration", "enquiry")
+
+
+class BookingDoc(BaseModel):
+    """The booking block's copy. Which fields the form asks for follows `kind`, so a table booking
+    asks for a party size and a consultation asks for the subject - not one generic form."""
+    kind: str = Field(default="appointment", max_length=20)
+    title: str = Field(default="", max_length=60)
+    intro: str = Field(default="", max_length=200)
+    options: Annotated[list[str], _trim(5)] = Field(default_factory=list)
+    note: str = Field(default="", max_length=200)
+    sample: bool = True
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, v: str) -> str:
+        if v not in BOOKING_KINDS:
+            raise ValueError(f"booking kind must be one of {', '.join(BOOKING_KINDS)}")
+        return v
+
+
+class SectionTitle(BaseModel):
+    """A section's heading in this site's own words: a café's list is a Menu, a school's is a Course
+    catalogue. Only the name of a section the builder knows, so a heading cannot attach itself to a
+    block that is not on the page."""
+    section: str = Field(max_length=20)
+    text: str = Field(max_length=48)
+
+    @field_validator("section")
+    @classmethod
+    def _section(cls, v: str) -> str:
+        from app.agents import styles as design_styles
+        if v not in design_styles.SECTION_KEYS:
+            raise ValueError(f"'{v}' is not a section this page can carry")
+        return v
+
+
 class CopyDoc(BaseModel):
     product_name: str = Field(max_length=40)
     headline: str = Field(max_length=120)
@@ -269,10 +415,21 @@ class CopyDoc(BaseModel):
     features: Annotated[list[Feature], _trim(6)] = Field(min_length=3)
     faq: Annotated[list[FAQ], _trim(6)] = Field(min_length=3)
     cta: CTA
+    titles: Annotated[list[SectionTitle], _trim(12)] = Field(default_factory=list)
+    about: AboutDoc = AboutDoc()
+    stats: Annotated[list[Stat], _trim(4)] = Field(default_factory=list)
+    skills: Annotated[list[SkillGroup], _trim(4)] = Field(default_factory=list)
+    services: Annotated[list[Service], _trim(6)] = Field(default_factory=list)
+    work: Annotated[list[CaseStudy], _trim(4)] = Field(default_factory=list)
+    catalog: Annotated[list[CatalogItem], _trim(8)] = Field(default_factory=list)
+    preview: PreviewDoc = PreviewDoc()
+    timeline: Annotated[list[TimelineEntry], _trim(6)] = Field(default_factory=list)
     testimonials: Annotated[list[Testimonial], _trim(3)] = Field(default_factory=list)
     pricing: Annotated[list[Plan], _trim(3)] = Field(default_factory=list)
     gallery: Annotated[list[GalleryItem], _trim(6)] = Field(default_factory=list)
     team: Annotated[list[TeamRole], _trim(4)] = Field(default_factory=list)
+    visit: VisitDoc = VisitDoc()
+    booking: BookingDoc = BookingDoc()
     contact: ContactInfo = ContactInfo()
 
 

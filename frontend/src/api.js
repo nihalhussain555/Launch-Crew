@@ -60,6 +60,11 @@ export const api = {
   styleDetail: (key) => json(`/api/styles/${encodeURIComponent(key)}`),
   resolveBrief: (spec) => post("/api/styles/resolve", spec),
   compareStyles: (projectId, styles) => post(`/api/projects/${projectId}/compare`, { styles }),
+  // template gallery: the professional briefs the registry can actually build, and the page each composes to
+  templates: () => json("/api/templates"),
+  templateSections: () => json("/api/templates/sections"),
+  templateDetail: (key) => json(`/api/templates/${encodeURIComponent(key)}`),
+  templatePreview: (key) => json(`/api/templates/${encodeURIComponent(key)}/preview`),
   // workspace: generated files, version history, diffs and AI actions
   files: (id) => json(`/api/runs/${id}/files`),
   fileText: async (id, name) => (await raw(`/api/runs/${id}/files/${encodeURIComponent(name)}`)).text(),

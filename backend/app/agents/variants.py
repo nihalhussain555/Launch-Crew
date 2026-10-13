@@ -22,6 +22,7 @@ import re
 import zlib
 from dataclasses import dataclass, field
 
+from app.agents import looks as look_mod
 from app.agents import styles as design_styles
 from app.agents import theme as theme_mod
 from app.utils.color import contrast_ratio, mix
@@ -121,6 +122,7 @@ class DesignDirection:
     tokens: dict = field(repr=False)
     rules: tuple = field(repr=False)
     notes: str = ""
+    look: str = ""                # the template's art direction applied to this style ("" when none)
     color_note: str = ""           # what happened to the brief's preferred colour, for the run trace
     palette: dict = field(repr=False, default_factory=dict)
     fonts: dict = field(repr=False, default_factory=dict)
@@ -153,7 +155,7 @@ _COMPOSED: dict[tuple, DesignDirection] = {}
 def compose(style: Style, order: tuple[str, ...] | None = None,
             palette: dict | None = None, color_note: str = "",
             tokens: dict | None = None, theme_value: dict | None = None,
-            fonts: dict | None = None) -> DesignDirection:
+            fonts: dict | None = None, look: str = "") -> DesignDirection:
     """A direction from a style. `order` may narrow or extend the style's default section sequence.
 
     An order the caller supplies is taken as complete for the optional sections - it comes back from a
@@ -164,24 +166,31 @@ def compose(style: Style, order: tuple[str, ...] | None = None,
     with `fonts` and `palette` from the same theme; `theme_value` is the theme that produced them, kept
     so the trace and the review step can name it. None of it can change a layout slot, which is why a
     themed run is still recognisably its style.
+
+    `look` names the template whose art direction `style` has already been folded with (see
+    `app/agents/looks.apply`). It is part of the cache key because a look changes the composition slots of
+    a style that keeps its own key: without it, two templates sharing a style would be handed each other's
+    memoised direction.
     """
     seq = _required_only(order if order is not None else _default_order(style))
     overrides = {k: str(v) for k, v in (tokens or {}).items() if k in theme_mod.THEME_TOKEN_KEYS}
     faces = {k: str(v) for k, v in (fonts or {}).items() if _FONT.fullmatch(str(v))}
-    slot = (style.key, seq, tuple(sorted((palette or {}).items())), color_note,
+    slot = (style.key, look, seq, tuple(sorted((palette or {}).items())), color_note,
             tuple(sorted(overrides.items())), tuple(sorted(faces.items())),
             json.dumps(theme_value or {}, sort_keys=True))
     if slot not in _COMPOSED:
         merged = dict(style.tokens)
         merged.update(overrides)
+        look_obj = look_mod.get(look)
         _COMPOSED[slot] = DesignDirection(
-            key=f"{style.key}-{'-'.join(seq)}" + ("-recoloured" if color_note else "")
+            key=f"{style.key}{f'-{look}' if look else ''}-{'-'.join(seq)}"
+                + ("-recoloured" if color_note else "")
                 + ("-themed" if overrides and not color_note else ""),
             style_key=style.key, theme_key="",
-            label=style.label, layout_style=style.layout_style,
+            label=(look_obj.label if look_obj else style.label), layout_style=style.layout_style,
             hero=style.hero, nav=style.nav, features=style.features, motif=style.motif,
             order=seq, radius=overrides.get("radius") or style.radius, tokens=merged,
-            rules=style.rules, notes=style.slot_notes(), color_note=color_note,
+            rules=style.rules, notes=style.slot_notes(), color_note=color_note, look=look,
             palette=dict(palette or style.palette),
             fonts={**style.fonts, **faces} if faces else dict(style.fonts),
             theme=dict(theme_value or {}),
@@ -305,10 +314,13 @@ def direction_for(seed: str, spec: dict | None = None) -> DesignDirection:
 
     A brief that carries a theme gets that theme's palette, fonts and appearance tokens on top of the
     style's composition; without one the style is drawn as designed, with the legacy colour-preference
-    path.
+    path. A brief that names a template is drawn through that template's art direction first
+    (`app/agents/looks.py`) - a theme still wins on colour, because the owner set it deliberately and the
+    template only suggested it.
     """
     spec = spec or {}
     style = style_for(seed, spec)
+    style, look = look_mod.apply(style, spec.get("template", ""))
     style = design_styles.with_sections(style, _wanted_sections(style, spec))
     if spec.get("theme"):
         resolved = theme_mod.resolve(theme_input(spec))
@@ -317,9 +329,9 @@ def direction_for(seed: str, spec: dict | None = None) -> DesignDirection:
                 or (f"preferred colour {colour} applied through the theme" if _HEX.fullmatch(colour) else ""))
         return compose(style, palette=resolved["palette"], color_note=note,
                        tokens=theme_mod.tokens_for(resolved, style),
-                       fonts=resolved["fonts"], theme_value=theme_mod.as_stored(resolved))
+                       fonts=resolved["fonts"], theme_value=theme_mod.as_stored(resolved), look=look)
     palette, color_note = _recolour(style.palette, spec.get("color", ""))
-    return compose(style, palette=palette, color_note=color_note)
+    return compose(style, palette=palette, color_note=color_note, look=look)
 
 
 def pick_direction(seed: str, spec: dict | None = None) -> DesignDirection:
@@ -403,6 +415,11 @@ def from_dict(value: dict | None) -> DesignDirection:
     style = design_styles.get(str(value.get("style_key", "")))
     if style is None:
         return fallback()
+    # A stored look the registry no longer knows about resolves to no look, which re-draws the page in its
+    # plain style. That is the honest reading of a renamed template; inventing a substitute would restyle
+    # someone's approved page behind their back.
+    stored_look = str(value.get("look", "") or "")
+    style, look = look_mod.apply(style, stored_look if look_mod.get(stored_look) else "")
     order = value.get("order")
     if (not isinstance(order, list) or not set(REQUIRED_SECTIONS) <= set(order)
             or not set(order) <= set(SECTIONS) or len(order) != len(set(order))):
@@ -415,7 +432,7 @@ def from_dict(value: dict | None) -> DesignDirection:
     return compose(style, tuple(order) if order else None, palette=palette,
                    color_note=str(value.get("color_note", ""))[:400] if palette else "",
                    tokens=_token_overrides(value.get("tokens"), style), fonts=_stored_fonts(value.get("fonts"), style),
-                   theme_value=stored if isinstance(stored, dict) else {})
+                   theme_value=stored if isinstance(stored, dict) else {}, look=look)
 
 
 def as_dict(d: DesignDirection) -> dict:
@@ -423,7 +440,7 @@ def as_dict(d: DesignDirection) -> dict:
         "key": d.key, "style_key": d.style_key, "theme_key": d.theme_key, "label": d.label,
         "layout_style": d.layout_style, "hero": d.hero, "nav": d.nav, "features": d.features,
         "motif": d.motif, "order": list(d.order), "radius": d.radius, "tokens": dict(d.tokens),
-        "rules": list(d.rules), "notes": d.notes, "color_note": d.color_note,
+        "rules": list(d.rules), "notes": d.notes, "color_note": d.color_note, "look": d.look,
         "palette": dict(d.palette), "fonts": dict(d.fonts), "theme": dict(d.theme),
     }
     return out

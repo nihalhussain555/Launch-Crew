@@ -32,6 +32,10 @@ GROUPS = {
                    "tool_rounds_cap", "runs_per_hour", "max_revisions", "engineer_max_tokens",
                    "workspace_versions_keep", "preview_ttl_seconds", "preview_tickets_per_run"),
     "Storage": ("storage_backend", "storage_dir"),
+    # The IDE asks GET /api/runs/{id}/workspace/exec whether project code can be run here. Nothing in this
+    # backend executes workspace files, so this key only records the runtime an operator intends to wire a
+    # runner to; setting it does not enable Run.
+    "Project execution (IDE)": ("sandbox_runtime",),
 }
 REQUIRED = {"jwt_secret", "mongo_uri", "mongo_db", "allowed_origin"}
 SECRET = {"jwt_secret", "groq_api_key", "groq_api_keys", "tavily_api_key", "netlify_auth_token", "mongo_uri"}
@@ -52,6 +56,9 @@ NOTES = {
     "workspace_versions_keep": "Whole-file-set snapshots held per run: how far undo and restore reach back.",
     "preview_ttl_seconds": "How long one live-preview link stays valid before it has to be re-issued.",
     "preview_tickets_per_run": "Preview links open per run; issuing a newer one retires the older links.",
+    "sandbox_runtime": "Names an intended sandbox runtime (docker/podman) for the IDE's status report. "
+                       "No runner uses it yet, so setting it does not make Run work - this backend "
+                       "executes no project code.",
 }
 
 

@@ -5,9 +5,13 @@ import os
 # test that reaches the gate creates a live site on that account and leaves it there. Empty token -> deploy.py's
 # own simulated branch, which is also what a fresh install without a token does. test_deploy_bundle.py covers
 # both branches explicitly and builds its own Settings, so it is unaffected.
+# The provider keys are blanked for the same reason in reverse: test_config_api asserts a fresh install
+# reports them as unset, and test_key_pool builds a pool from the keys it names. A developer's real .env (a
+# second Groq key, a chosen model) must not decide whether the suite passes - those tests describe the
+# empty-key case, and each one that wants a populated Settings constructs one itself.
 os.environ.update({"MOCK_LLM": "true", "MONGO_URI": "mock://", "JWT_SECRET": "test-secret",
                    "STORAGE_DIR": "/tmp/launchcrew-test-artifacts", "LLM_BACKOFF_BASE_S": "0.01",
-                   "NETLIFY_AUTH_TOKEN": ""})
+                   "NETLIFY_AUTH_TOKEN": "", "GROQ_API_KEY": "", "GROQ_MODEL": "", "TAVILY_API_KEY": ""})
 
 import pytest
 

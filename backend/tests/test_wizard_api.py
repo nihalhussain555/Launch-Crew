@@ -56,7 +56,10 @@ def test_the_registry_serves_the_styles_the_pipeline_can_build(client, auth):
     assert [s["key"] for s in body["styles"]] == list(design_styles.keys())
     assert [b["key"] for b in body["business_types"]] == list(design_styles.BUSINESS_BY_KEY)
     assert body["sections"] == {"always": list(design_styles.REQUIRED_SECTIONS),
-                                "optional": list(design_styles.OPTIONAL_SECTIONS)}
+                                "optional": list(design_styles.OPTIONAL_SECTIONS),
+                                "cards": design_styles.section_cards()}
+    # the picker reads the cards, so a card has to exist for every name in the vocabulary and only those
+    assert [c["key"] for c in body["sections"]["cards"]] == list(design_styles.SECTION_KEYS)
 
     vocab = body["vocabulary"]
     assert vocab["heroes"] == list(design_styles.HEROES)
@@ -148,8 +151,9 @@ def test_the_preview_stores_exactly_what_the_project_gets(client, auth):
     assert created["spec"]["sections"] == resolved["spec"]["sections"]
     assert created["spec"]["pages"] == resolved["pages"]
     assert created["spec"]["style"] == resolved["spec"]["style"]
-    # brief (team) + what an education site implies (testimonials, pricing) + the store style's own (gallery, contact)
-    assert created["spec"]["sections"] == ["testimonials", "pricing", "gallery", "team", "contact"]
+    # brief (team) + what an education site implies (testimonials, pricing) + the asking for a lesson
+    # (booking, its own block now) + the store style's own (gallery, contact)
+    assert created["spec"]["sections"] == ["testimonials", "pricing", "gallery", "team", "booking", "contact"]
 
 
 @pytest.mark.parametrize("bad", [
@@ -175,7 +179,7 @@ def test_a_plain_idea_still_creates_a_project(client, auth):
                     headers=auth).json()
     assert p["spec"] == {"business_type": "other", "audience": "", "pages": ["home", "contact"],
                          "style": "", "color": "", "features": [], "tone": "", "sections": [],
-                         "theme": {}, "feature_keys": []}
+                         "theme": {}, "feature_keys": [], "template": ""}
     assert p["name"] == "A habit tracker for night-shift workers"
 
 

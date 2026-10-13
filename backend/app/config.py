@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     preview_ttl_seconds: int = 300
     preview_tickets_per_run: int = 5
 
+    # Project execution. This backend deliberately runs no workspace code: the IDE's status endpoint only
+    # reports whether a runtime is named and installed, so an operator standing up a real sandbox can
+    # record what the host offers here before any runner exists to use it.
+    sandbox_runtime: str = ""
+
     # Artifact storage (HTML + screenshots): "mongo" (default, survives redeploys) or "local" (STORAGE_DIR).
     storage_backend: str = "mongo"
     storage_dir: str = "./data/artifacts"

@@ -15,6 +15,10 @@ NON_COMPOSITED = ("width", "height", "top", "left", "right", "bottom", "margin",
 LAY_OUT_RE = re.compile(r"(?:transition|animation)\s*:[^;]*\b(" + "|".join(NON_COMPOSITED) + r")\b", re.I)
 DATA_URI = re.compile(r"""data:[^"')\s]{40,}""")
 KB = 1024
+# A page may carry sample photography, but one file over this is heavy whatever the split inside it.
+HEAVY_CEIL_B = 600 * KB
+# Inlined media above this is a finding of its own, even when the text of the page is lean.
+MEDIA_WARN_B = 180 * KB
 
 
 def _depth(el, current=0) -> int:
@@ -24,13 +28,15 @@ def _depth(el, current=0) -> int:
     return max(_depth(c, current + 1) for c in kids)
 
 
-def _wire_bytes(raw: int) -> int:
-    return max(1200, int(raw * 0.32))
+def _wire_bytes(raw: int, media: int = 0) -> int:
+    """Bytes on the wire. Text gzips to about a third; already-compressed images inlined as base64 do not
+    gzip at all, so treating a photo page like a text page would flatter its load time."""
+    return max(1200, int((raw - media) * 0.32 + media))
 
 
-def estimate_seconds(raw_bytes: int, requests: int) -> float:
+def estimate_seconds(raw_bytes: int, requests: int, media: int = 0) -> float:
     rtt = 0.15 * max(1, requests)
-    return round(rtt + _wire_bytes(raw_bytes) / 200_000, 2)
+    return round(rtt + _wire_bytes(raw_bytes, media) / 200_000, 2)
 
 
 def scan(html: str, *, assets: dict[str, str] | None = None, measured: list[dict] | None = None) -> list[dict]:
@@ -39,6 +45,8 @@ def scan(html: str, *, assets: dict[str, str] | None = None, measured: list[dict
     assets = assets or {}
 
     page_bytes = len(html.encode())
+    media_bytes = sum(len(d) for d in DATA_URI.findall(html)) * 3 // 4
+    text_bytes = max(0, page_bytes - media_bytes)
     total = page_bytes + sum(len(text.encode()) for text in assets.values())
     css_bytes = len(au.css_text(page).encode())
     js_bytes = sum(len(s.encode()) for s in au.inline_scripts(page))
@@ -46,20 +54,31 @@ def scan(html: str, *, assets: dict[str, str] | None = None, measured: list[dict
     refs = au.external_refs(html)
     requests = 1 + len(refs)          # the file itself, plus anything it reaches out for
 
-    if page_bytes < 60 * KB:
-        findings.append(au.ok("payload", "Page weight", f"{page_bytes / KB:.1f} KB for index.html; "
-                                                        f"{total / KB:.1f} KB for the whole workspace"))
-    elif page_bytes < 150 * KB:
-        findings.append(au.finding("payload", "Page weight", au.WARN, f"{page_bytes / KB:.1f} KB in one file.",
+    # The gate is on the page's own markup and CSS. Inlined photography is a separate decision with its
+    # own ceiling: a template page carries sample pictures on purpose, and it is the text of the page
+    # that this builder can actually shorten.
+    if page_bytes >= HEAVY_CEIL_B:
+        findings.append(au.finding("payload", "Page weight", au.FAIL, f"{page_bytes / KB:.1f} KB in one file.",
+                                   "Cut the payload: use fewer or smaller images, or serve them as files "
+                                   "instead of inlining them."))
+    elif text_bytes < 60 * KB:
+        findings.append(au.ok("payload", "Page weight",
+                              f"{text_bytes / KB:.1f} KB of markup and CSS"
+                              + (f" plus {media_bytes / KB:.1f} KB of inlined images" if media_bytes else "")
+                              + f"; {total / KB:.1f} KB for the whole workspace"))
+    elif text_bytes < 150 * KB:
+        findings.append(au.finding("payload", "Page weight", au.WARN,
+                                   f"{text_bytes / KB:.1f} KB of markup and CSS, {page_bytes / KB:.1f} KB in one file.",
                                    "Move the largest sections' markup into fewer repeated blocks, or split the stylesheet "
                                    "so the first paint only needs the hero rules."))
     else:
-        findings.append(au.finding("payload", "Page weight", au.FAIL, f"{page_bytes / KB:.1f} KB in one file.",
-                                   "Cut the payload: remove embedded base64 media and shorten the page."))
+        findings.append(au.finding("payload", "Page weight", au.FAIL,
+                                   f"{text_bytes / KB:.1f} KB of markup and CSS, {page_bytes / KB:.1f} KB in one file.",
+                                   "Cut the payload: shorten the page, then look at the images it inlines."))
 
     findings.append(au.finding("transfer", "Estimated time to first byte on a slow connection", au.INFO,
-                               f"{_wire_bytes(page_bytes) / KB:.1f} KB after gzip, {requests} request(s) -> "
-                               f"about {estimate_seconds(page_bytes, requests)}s at 1.6 Mbps / 150 ms RTT. "
+                               f"{_wire_bytes(page_bytes, media_bytes) / KB:.1f} KB after gzip, {requests} request(s) -> "
+                               f"about {estimate_seconds(page_bytes, requests, media_bytes)}s at 1.6 Mbps / 150 ms RTT. "
                                "Estimate from measured bytes, not a lab run.",
                                severity=au.INFO_SEVERITY))
 
@@ -92,12 +111,18 @@ def scan(html: str, *, assets: dict[str, str] | None = None, measured: list[dict
                                "Animate transform and opacity instead of size, position or shadow."))
 
     data_uris = [len(d) for d in DATA_URI.findall(html)]
-    if data_uris:
-        findings.append(au.finding("embedded_media", "Embedded base64 media", au.WARN,
-                                   f"{len(data_uris)} data URI(s), {sum(data_uris) / KB:.1f} KB of the payload.",
-                                   "Serve images as files (or use CSS art) so the text of the page stays small."))
-    else:
+    media_total = sum(data_uris)
+    if not data_uris:
         findings.append(au.ok("embedded_media", "Embedded base64 media", "none: the page is text and CSS only"))
+    elif media_total < MEDIA_WARN_B:
+        findings.append(au.ok("embedded_media", "Embedded base64 media",
+                              f"{len(data_uris)} image(s) inlined, {media_total / KB:.1f} KB of the payload. Inlining is "
+                              "how a single-file page shows pictures at all under its own CSP (img-src data:)."))
+    else:
+        findings.append(au.finding("embedded_media", "Embedded base64 media", au.WARN,
+                                   f"{len(data_uris)} data URI(s), {media_total / KB:.1f} KB of the payload.",
+                                   "Use fewer or smaller images: every inlined picture is weight the visitor downloads "
+                                   "before the page is seen."))
 
     imgs = page.find_all("img")
     unsized = [i for i in imgs if not (i.get("width") and i.get("height"))]

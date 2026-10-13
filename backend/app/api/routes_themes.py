@@ -48,8 +48,15 @@ class ApplyToBriefIn(BaseModel):
 
 
 class SamplePageIn(ApplyToBriefIn):
-    """A whole sample page: the controls to draw it with, plus the style to lay it out in."""
+    """A whole sample page: the controls to draw it with, plus the style to lay it out in.
+
+    `business` is optional and only changes the words the sample page introduces its blocks with (a
+    cafe's list is headed Menu, a school's Courses) so the customizer can be checked against the kind
+    of site it is being tuned for. An unknown key is ignored rather than rejected: it is cosmetics on
+    a throwaway page, and a stale value from a browser must not break the preview.
+    """
     theme: dict = Field(default_factory=dict)
+    business: str = Field(default="", max_length=24)
 
 
 def _validate_colors(controls: dict) -> None:
@@ -332,7 +339,8 @@ async def preview_page(body: SamplePageIn, user=Depends(get_current_user)):
     resolved = _resolve(body.theme)
     direction = variants.direction_for("theme-preview", {"style": body.style,
                                                          "theme": design_theme.as_stored(resolved)})
-    return {"html": mock.design_sample_page(direction), "style_key": direction.style_key,
+    business = body.business if body.business in design_styles.BUSINESS_BY_KEY else ""
+    return {"html": mock.design_sample_page(direction, business), "style_key": direction.style_key,
             "style_label": direction.label, "theme": resolved, "tokens": resolved["tokens"],
             "summary": design_theme.describe(resolved), "contrast": resolved["contrast"],
             "notes": resolved["notes"], "brief": direction.brief(), "sample_copy": True}

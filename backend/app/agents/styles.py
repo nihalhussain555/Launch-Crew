@@ -40,9 +40,35 @@ MOTIFS = ("rules", "glow", "hairline-caps", "blur", "gridlines", "depth", "ticke
 
 # The hero is always first; these are the sections every page has, and what the Chromium checks look for.
 REQUIRED_SECTIONS = ("features", "faq", "cta")
-# Optional sections a brief can ask for. Order here is the order they may appear in.
-OPTIONAL_SECTIONS = ("testimonials", "pricing", "gallery", "team", "contact")
+# Optional sections a brief can ask for. Order here is the order they may appear in, and it decides how
+# a mixed list normalises, so the pairs that pre-dated these additions keep their relative order.
+OPTIONAL_SECTIONS = ("about", "stats", "skills", "services", "work", "catalog", "preview", "timeline",
+                     "testimonials", "pricing", "gallery", "team", "visit", "booking", "contact")
 SECTION_KEYS = REQUIRED_SECTIONS + OPTIONAL_SECTIONS
+
+# What a section carries, in the words the gallery and the wizard show. The page builder renders each of
+# these as its own markup, so this is a description of real content, not a label for one generic block.
+SECTION_INFO = {
+    "about": ("About", "an intro paragraph, the facts a buyer checks, and the credentials behind them"),
+    "stats": ("By the numbers", "large figures with a label each, for track record and scale"),
+    "skills": ("Skills", "grouped capability lists - what the work actually uses"),
+    "services": ("Services", "each service with what it covers and its lead time or price-from line"),
+    "work": ("Selected work", "case rows: the client, the brief, the outcome and one measure"),
+    "catalog": ("Catalogue", "items with a note, a price or spec line and a category tag - products, "
+                             "menu items, courses, listings, articles"),
+    "preview": ("Product preview", "a CSS-drawn window or phone frame with captioned pointers at it"),
+    "timeline": ("Schedule", "dated rows - an agenda, a learning path, a career history, announcements"),
+    "testimonials": ("Testimonials", "quotes with attributions, each marked when the crew wrote it"),
+    "pricing": ("Plans", "a tier row with prices, what is included and one emphasised plan"),
+    "gallery": ("Gallery", "captioned panels drawn in CSS, for work samples and product views"),
+    "team": ("People", "the roles on the page - founders, practitioners, instructors, speakers"),
+    "visit": ("Find us", "the address, the opening hours as rows, and how to get there"),
+    "booking": ("Book", "a validated form for a reservation, appointment, consultation or place"),
+    "contact": ("Contact", "the email, phone and location the brief supplied, and nothing invented"),
+    "features": ("Features", "what the product does, laid out the way the style lays features out"),
+    "faq": ("FAQ", "the questions a first-time visitor asks, as expandable rows"),
+    "cta": ("Call to action", "the closing pitch with the email capture form"),
+}
 
 HERO_NOTES = {
     "rail": "brand and vertical navigation rail down the left edge of the hero, headline block beside it",
@@ -343,6 +369,9 @@ class Business:
 
 
 BUSINESS_TYPES: tuple[Business, ...] = (
+    Business("corporate", "Business & consulting", "corporate",
+             ("about", "stats", "services", "work", "team", "contact"),
+             ("home", "about", "services", "work", "contact")),
     Business("saas", "SaaS / software", "saas", ("testimonials", "pricing"),
              ("home", "pricing", "features", "contact")),
     Business("ai", "AI product", "dark", ("testimonials", "pricing"),
@@ -361,6 +390,9 @@ BUSINESS_TYPES: tuple[Business, ...] = (
              ("home", "curriculum", "pricing", "contact")),
     Business("health", "Clinic / healthcare", "corporate", ("team", "contact"),
              ("home", "services", "team", "contact")),
+    Business("legal", "Law firm / advisory", "editorial",
+             ("about", "stats", "services", "team", "work", "booking"),
+             ("home", "services", "team", "about", "contact")),
     Business("realestate", "Real estate", "luxury", ("gallery", "contact"),
              ("home", "listings", "agents", "contact")),
     Business("event", "Event / community", "gradient", ("gallery", "contact"),
@@ -381,7 +413,21 @@ SECTION_KEYWORDS: dict[str, tuple] = {
     "pricing": ("pricing", "price", "plan", "tier", "subscription", "package"),
     "gallery": ("gallery", "portfolio", "screenshot", "photo", "imagery", "showcase", "work samples"),
     "team": ("team", "staff", "founders", "people", "about us", "consultants"),
-    "contact": ("contact", "enquiry", "inquiry", "booking", "appointment", "address", "phone", "map"),
+    "contact": ("contact", "enquiry", "inquiry", "address", "phone", "map", "email us"),
+    "about": ("about", "company profile", "our story", "history", "mission", "who we are", "biography"),
+    "services": ("service", "services", "practice area", "what we do", "offer", "treatment", "repair"),
+    "work": ("case study", "client project", "selected work", "track record", "portfolio of work"),
+    "catalog": ("catalog", "catalogue", "products", "menu", "courses", "listings", "properties",
+                "collection", "shop", "store"),
+    "visit": ("opening hours", "shop hours", "find us", "location", "where we are", "get here", "address of"),
+    "booking": ("book", "booking", "reserve", "reservation", "appointment", "schedule a", "register",
+                "sign up for a slot", "consultation"),
+    "stats": ("achievements", "awards", "years in business", "clients served", "by the numbers"),
+    "timeline": ("agenda", "schedule", "curriculum", "learning path", "experience", "roadmap",
+                 "what happens when", "announcements"),
+    "skills": ("skills", "tech stack", "stack", "capabilities", "expertise", "specialisms"),
+    "preview": ("demo", "product tour", "app preview", "product preview", "interactive preview",
+                "screenshots of the app"),
 }
 
 
@@ -432,6 +478,16 @@ def cards() -> list[dict]:
 def business_cards() -> list[dict]:
     return [{"key": b.key, "label": b.label, "style": b.style, "sections": list(b.sections),
              "pages": list(b.pages)} for b in BUSINESS_TYPES]
+
+
+def section_cards() -> list[dict]:
+    """Every section the builder can render, with the words the gallery and the wizard put on it.
+
+    One list for both: a section a card describes is a section the page builder has code for, which is
+    what keeps a template's content list from naming blocks that no run can produce.
+    """
+    return [{"key": key, "label": SECTION_INFO[key][0], "carries": SECTION_INFO[key][1],
+             "always": key in REQUIRED_SECTIONS} for key in SECTION_KEYS]
 
 
 def with_sections(style: Style, sections: tuple[str, ...]) -> Style:

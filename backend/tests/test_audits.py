@@ -154,6 +154,50 @@ def test_performance_audit_reports_measured_mobile_overflow_as_an_error():
     assert statuses(f)["overflow"] == au.FAIL and "512" in one(f, "overflow")["detail"]
 
 
+# A page of copy that is lean, with one inlined photograph bolted on: what a template page is made of.
+# The URI is over MEDIA_WARN_B while the text either side of it stays under the 60 KB the payload gate
+# allows, so the two findings have to disagree with each other on purpose.
+LEAN_TEXT = ('<!doctype html><html><head><title>Photographed page</title></head><body>'
+             + "<section><p>Two hundred bytes of honest copy about the business.</p>" * 10 + "</body></html>")
+PHOTO_B64 = "Q" * 200_000
+
+
+def test_performance_audit_measures_the_page_apart_from_the_photography_inlined_in_it():
+    """A template page carries sample pictures on purpose. Scoring its markup by the size of the whole
+    file would fail every illustrated card for the one thing the brief asked it to show."""
+    photo = LEAN_TEXT.replace("</body>", f'<img src="data:image/webp;base64,{PHOTO_B64}"'
+                                        f' width="900" height="600" alt="a sample photograph"></body>')
+    f = audit_perf.scan(photo)
+    payload = one(f, "payload")
+    assert payload["status"] == au.PASS, payload["detail"]
+    assert "of markup and CSS" in payload["detail"] and "of inlined images" in payload["detail"], payload["detail"]
+    # ...and the pictures are still called out, as their own finding, rather than folding into the page's
+    assert statuses(f)["embedded_media"] == au.WARN and "data URI" in one(f, "embedded_media")["detail"]
+    assert statuses(f)["cls"] == au.PASS          # sized, so no layout shift from the picture
+
+
+def test_an_inlined_picture_is_not_gzipped_away_in_the_load_estimate():
+    """Base64 photography is already compressed: pretending it shrinks like text would understate exactly
+    the pages that weigh the most."""
+    raw = len(LEAN_TEXT.replace("</body>", f'<img src="data:image/webp;base64,{PHOTO_B64}"'
+                                          f' width="9" height="9" alt="x"></body>'))
+    media = len(PHOTO_B64) * 3 // 4
+    honest = audit_perf.estimate_seconds(raw, 1, media)
+    flattered = audit_perf.estimate_seconds(raw, 1)
+    assert honest > flattered, (honest, flattered)
+    assert honest > 0.9 and flattered < 0.6, (honest, flattered)   # two seconds' worth of picture, not half
+
+
+def test_a_page_of_only_markup_still_fails_on_its_markup():
+    """The split is not a free pass: with no pictures in it, a heavy page is still a heavy page."""
+    heavy = ('<!doctype html><html><head><title>Long</title></head><body>'
+             + ("<section><p>" + "x" * 6_000 + "</p></section>") * 30 + "</body></html>")
+    assert len(heavy.encode()) > 150 * 1024
+    f = audit_perf.scan(heavy)
+    assert statuses(f)["payload"] == au.FAIL, one(f, "payload")["detail"]
+    assert statuses(f)["embedded_media"] == au.PASS       # nothing inlined: the weight is all markup
+
+
 # ------------------------------------------------------------------------ dependencies
 def test_dependency_audit_of_this_repo_reports_no_errors():
     f = dependency_scan.scan("<p>one self-contained file</p>")

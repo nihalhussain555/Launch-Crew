@@ -98,6 +98,25 @@ kbd{font:12px ui-monospace,Menlo,monospace;background:var(--surface-2);border:1p
 /* the real brief a template card carries (site type, style, sections) - read-only, not a control */
 .tpl-brief{display:flex;flex-direction:column;gap:8px;width:100%;padding:10px 11px;border:1px dashed var(--border);border-radius:12px;background:color-mix(in srgb,var(--primary) 6%,transparent)}
 .tpl-brief .chip{cursor:default}
+/* the numbered template gallery: registry order reads 01..20, and a card states what it still needs */
+.tpl-num{font:700 12px/1 var(--font-mono,inherit);letter-spacing:.08em;color:var(--muted)}
+.tpl-num.lg{font-size:15px}
+.tpl-title{display:flex;align-items:baseline;gap:10px}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 18px;margin:14px 0}
+.kv div{border-top:1px solid var(--border);padding-top:9px}
+.kv dt{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.kv dd{margin:4px 0 0;font-size:14px;font-weight:600;overflow-wrap:anywhere}
+.block-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.block-list li{display:flex;flex-direction:column;gap:2px;padding:10px 0;border-top:1px solid var(--border)}
+.block-list li:first-child{border-top:0}
+.block-list strong{font-size:14.5px}
+/* one requested feature per row: its own catalog status, then what that status means in steps */
+.cap-rows{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:12px}
+.cap-rows>li{padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface-2)}
+.cap-row-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.cap-detail{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--muted)}
+.cap-detail code{padding:1px 6px;border-radius:6px;background:color-mix(in srgb,var(--text) 8%,transparent);font-size:12px}
+.note-list{list-style:disc;margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px;font-size:14px}
 /* settings + profile: one aligned row system (key left, value right, hairline dividers) */
 .set-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:18px;align-items:start}
 .set-card{gap:12px}

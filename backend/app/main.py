@@ -5,8 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (routes_auth, routes_config, routes_features, routes_preview, routes_projects,
-                     routes_runs, routes_share, routes_stats, routes_stream, routes_styles, routes_themes,
-                     routes_theme_edit, routes_visual, routes_workspace)
+                     routes_runs, routes_share, routes_stats, routes_stream, routes_styles, routes_templates,
+                     routes_themes, routes_theme_edit, routes_visual, routes_workspace)
 from app.config import get_settings
 from app.db.mongo import create_client, ensure_indexes
 from app.llm.client import LLMClient
@@ -40,7 +40,8 @@ app.add_middleware(CORSMiddleware, allow_origins=get_settings().origins, allow_c
                    allow_methods=["*"], allow_headers=["*"])
 for r in (routes_auth.router, routes_config.router, routes_projects.router, routes_runs.router,
           routes_preview.router, routes_share.router, routes_stats.router, routes_stream.router,
-          routes_styles.router, routes_themes.router, routes_theme_edit.router, routes_visual.router,
+          routes_styles.router, routes_templates.router, routes_themes.router,
+          routes_theme_edit.router, routes_visual.router,
           routes_workspace.router, routes_features.router, routes_features.run_router):
     app.include_router(r)
 

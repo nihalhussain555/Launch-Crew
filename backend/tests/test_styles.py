@@ -202,7 +202,7 @@ def test_an_unknown_business_type_gets_the_smallest_honest_set():
 
 @pytest.mark.parametrize("needle,section", [
     ("a case study", "testimonials"), ("a subscription tier", "pricing"), ("screenshot gallery", "gallery"),
-    ("our founders", "team"), ("book an appointment", "contact"), ("phone and address", "contact"),
+    ("our founders", "team"), ("book an appointment", "booking"), ("phone and address", "contact"),
 ])
 def test_a_named_feature_adds_the_section_that_can_carry_it(needle, section):
     assert section in design_styles.sections_for("other", [needle])
@@ -223,7 +223,7 @@ def test_resolve_sections_adds_the_styles_defaults_and_nobody_elses():
     assert design_styles.resolve_sections("other", [], "") == ()
     assert design_styles.resolve_sections("other", [], "saas") == ("testimonials", "pricing")
     assert design_styles.resolve_sections("other", [], "not-a-style") == ()
-    assert design_styles.resolve_sections("saas", ["booking"], "minimal") == ("testimonials", "pricing", "contact")
+    assert design_styles.resolve_sections("saas", ["booking"], "minimal") == ("testimonials", "pricing", "booking")
     for s in design_styles.STYLES:
         assert set(s.sections) <= set(design_styles.resolve_sections("other", [], s.key)), s.key
 

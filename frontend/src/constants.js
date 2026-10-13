@@ -5,68 +5,19 @@ export const EXAMPLES = [
 ];
 
 /**
- * Idea templates, each carrying the brief the crew actually builds from:
- * `business` is a business-type key and `style` a design-style key from the backend registry
- * (GET /api/styles), `sections` the optional sections to ask for. Starting a project from a template
- * posts these as the project's spec, so the card is a real choice and not a picture of one.
+ * The template gallery lives in `app/agents/templates.py` and arrives from GET /api/templates, so a card
+ * here is the brief a run really builds - there is no second list of titles, styles or sections on this
+ * side for the two to drift apart from. See hooks/useTemplates.js.
  */
-export const TEMPLATES = [
-  { cat: "SaaS", title: "Invoice reminders", business: "freelance", style: "saas",
-    sections: ["testimonials", "pricing"],
-    idea: "An invoice reminder tool for freelancers that politely chases late payments" },
-  { cat: "SaaS", title: "Receipt scanner", business: "saas", style: "minimal", sections: [],
-    idea: "A receipt scanner for small business owners that sorts expenses for tax season" },
-  { cat: "Health", title: "Night-shift habits", business: "health", style: "dark", sections: ["pricing"],
-    idea: "A habit tracker for night-shift workers" },
-  { cat: "Health", title: "Micro-meditation", business: "health", style: "glass",
-    sections: ["pricing", "testimonials"],
-    idea: "A 3-minute meditation app for people with anxiety at work" },
-  { cat: "Education", title: "Language exchange", business: "education", style: "startup",
-    sections: ["testimonials", "pricing"],
-    idea: "A language-exchange app for retirees who want to practise with native speakers" },
-  { cat: "Education", title: "Math coach", business: "education", style: "gradient",
-    sections: ["gallery", "pricing"],
-    idea: "An AI math practice coach for middle-school students that explains mistakes kindly" },
-  { cat: "Creators", title: "Clip finder", business: "ai", style: "brutalist", sections: ["pricing"],
-    idea: "A tool that finds the best short clips in long podcast episodes for creators" },
-  { cat: "Creators", title: "Commission manager", business: "freelance", style: "agency",
-    sections: ["gallery", "team"],
-    idea: "A commission manager for digital artists to track requests, payments and deadlines" },
-  { cat: "Local", title: "Café loyalty", business: "restaurant", style: "store",
-    sections: ["gallery", "contact"],
-    idea: "A digital loyalty card for independent coffee shops with no app download" },
-  { cat: "Local", title: "Dog walkers", business: "local", style: "corporate",
-    sections: ["testimonials", "contact"],
-    idea: "A booking and live-tracking service for neighbourhood dog walkers" },
-  { cat: "Productivity", title: "Focus rooms", business: "saas", style: "luxury",
-    sections: ["gallery", "testimonials"],
-    idea: "A virtual coworking space for remote workers who struggle to focus alone" },
-  { cat: "Productivity", title: "Inbox zero", business: "ai", style: "editorial", sections: ["gallery"],
-    idea: "An email triage assistant for busy founders that drafts replies in their voice" },
-];
-export const CATEGORIES = ["All", ...Array.from(new Set(TEMPLATES.map((t) => t.cat)))];
 
-/** The template's brief as the SiteSpec the API stores, with everything the card does not know left empty. */
-export const templateSpec = (t) => ({
-  business_type: t.business, audience: "", pages: [], style: t.style, color: "",
-  features: [], tone: "", sections: t.sections || [],
-});
-
-/** The same brief as wizard query params, so "refine in the wizard" opens on the card's own choice. */
-export const templateWizardLink = (t) => {
-  const q = new URLSearchParams({ idea: t.idea, business: t.business, style: t.style });
-  if (t.sections?.length) q.set("sections", t.sections.join(","));
-  return `/new?${q.toString()}`;
-};
-
-/** One custom glyph per category — used instead of emoji across the gallery. */
-export const CAT_ICON = {
-  SaaS: "layers",
-  Health: "shield",
-  Education: "book",
-  Creators: "sparkle",
-  Local: "globe",
-  Productivity: "workflow",
+/** One custom glyph per gallery category — used instead of emoji across the gallery. */
+const CAT_ICON = {
+  "Business & Corporate": "columns",
+  "SaaS, AI & Technology": "cpu",
+  "E-commerce & Retail": "layers",
+  "Professional Services": "shield",
+  "Education, Content & Community": "book",
+  "Startup & Conversion Templates": "rocket",
 };
 export const catIcon = (cat) => CAT_ICON[cat] || "sparkle";
 

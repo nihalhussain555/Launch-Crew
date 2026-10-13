@@ -17,9 +17,13 @@ class CopywriterAgent(BaseAgent):
         # The page is built from this document, so the writer is told which sections it needs copy for
         # - and nothing else, so a section nobody asked for does not arrive fully invented.
         needed = ",".join(direction.sections)
+        ask = (f"Write copy for exactly these sections: {needed}. Give each one a `titles` entry in the "
+               f"words this business uses (a café lists its Menu, a school its Courses, a clinic its "
+               f"Treatments). Anything you invent - a price, an hour, a client, a statistic, a quote - "
+               f"must carry sample=true so the page can say so out loud.")
         slim = {"positioning": st.positioning, "persona": {"name": st.persona.name, "description": st.persona.description,
                 "frustrations": st.persona.frustrations}, "key_messages": st.key_messages, "keywords": s.brief.keywords}
-        user = (f"IDEA: {s.idea}\nBRIEF: {brief_line(s.spec)}\nSECTIONS: {needed}\n"
+        user = (f"IDEA: {s.idea}\nBRIEF: {brief_line(s.spec)}\nSECTIONS: {needed}\n{ask}\n"
                 f"STRATEGY_JSON: {json.dumps(slim)}" + fixes_block(s, self.name, s.content))
         s.content = await self.call_json(ctx, user, CopyDoc)
         return f"Headline: {s.content.headline}"
