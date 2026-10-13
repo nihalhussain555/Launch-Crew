@@ -10,6 +10,7 @@ import SearchPanel from "../components/ide/SearchPanel";
 import SourceControl from "../components/ide/SourceControl";
 import Icon from "../components/Icon";
 import StatusPill from "../components/StatusPill";
+import StopBuild from "../components/StopBuild";
 import ConfirmModal from "../components/ConfirmModal";
 import EmptyState from "../components/EmptyState";
 import ErrorState from "../components/ErrorState";
@@ -354,6 +355,7 @@ export default function Ide() {
             {!editable && activeDoc?.save_via === "apply" && <span className="pill warn">page edits wait for the gate</span>}
           </div>
           <div className="row wrap">
+            <StopBuild run={run} onChange={setRun} onRefresh={refresh} />
             <button className="btn primary small" onClick={saveActive} disabled={!!busy || !active || preview || !dirty[active]}>
               <Icon name="check" size={14} /> Save
             </button>

@@ -6,12 +6,19 @@ from pydantic import BaseModel, Field
 
 from app.core.deps import get_current_user, get_db, get_settings_dep
 from app.db.models import RunOut, oid, run_out
+from app.orchestrator import cancel
 from app.orchestrator.graph import AUDIT_ORDER, infer_target
-from app.orchestrator.runner import (audit_pipeline, claim_for_deploy, claim_for_revision, debug_pipeline,
-                                     launch_pipeline, repair_pipeline, restore_pipeline, revise_pipeline)
+from app.orchestrator.runner import (DBEventSink, audit_pipeline, claim_for_deploy, claim_for_revision,
+                                     debug_pipeline, launch_pipeline, now, repair_pipeline, restore_pipeline,
+                                     revise_pipeline)
 from app.tools import differ
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
+
+# Statuses in which the crew is working on a run, so a Stop has something to stop. The same three names
+# routes_workspace and routes_ide guard their own writes with; each module keeps its own copy rather than
+# importing across the router layer, which would tie the routers to each other.
+BUSY = {"queued", "running", "deploying"}
 
 MEDIA = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
          ".js": "text/javascript; charset=utf-8", ".md": "text/markdown; charset=utf-8",
@@ -75,6 +82,43 @@ async def approve(run_id: str, request: Request, background: BackgroundTasks, db
         raise HTTPException(409, "Run is not awaiting approval")
     background.add_task(launch_pipeline, request.app.state, run_id)
     return run_out(await own_run(db, run_id, user))
+
+
+@router.post("/{run_id}/stop")
+async def stop(run_id: str, db=Depends(get_db), user=Depends(get_current_user)):
+    """Stop a run that is building. Pressing it is a decision, not a failure, and it is not a delete.
+
+    Two things happen and they cover different cases: the run gets a `cancel_requested` flag that every
+    agent boundary reads, which is what works for a run another worker started, and the pipeline waiting
+    in *this* process gets its event set, which abandons the model call in flight instead of waiting for
+    the step to finish. Whichever fires, the crew stops at the next boundary with whatever it already
+    checkpointed: the page it had published, if any, comes back to this gate for you to review.
+
+    The flag cannot be unwound into a resume - the abandoned step's tokens are spent - so this says plainly
+    what it did and did not reach.
+    """
+    run = await own_run(db, run_id, user)
+    status = run["status"]
+    if status not in BUSY:
+        raise HTTPException(409, f"This run is {status}, so nothing is building that could be stopped. "
+                                 f"Runs stop at the next agent boundary, and a finished run can be revised "
+                                 f"or re-run instead.")
+    already = bool(run.get("cancel_requested"))
+    await db.runs.update_one({"_id": oid(run_id)},
+                             {"$set": {"cancel_requested": True, "cancel_at": now()}})
+    interrupts_now = cancel.wake(run_id)
+    await DBEventSink(db, run_id)("stop_requested", {
+        "message": ("Stop already requested for this run; still waiting for the step in flight to end."
+                    if already else
+                    "Stop requested. The crew ends at its next boundary - the model call in flight is "
+                    "abandoned rather than finished."),
+        "status": status, "agent_step_in_flight": interrupts_now, "interrupts_now": interrupts_now})
+    return {"run": run_out(await own_run(db, run_id, user)), "requested": True, "already": already,
+            "interrupts_now": interrupts_now,
+            "message": ("Stopped now: this process is running the build and the step waiting on the model "
+                        "is abandoned." if interrupts_now else
+                        "Stop recorded. This build is running outside this worker, so it ends at its next "
+                        "agent boundary instead of in the middle of this one.")}
 
 
 @router.post("/{run_id}/revise", response_model=RunOut, status_code=202)

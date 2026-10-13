@@ -49,6 +49,8 @@ export const api = {
   createRun: (projectId, body) => post(`/api/projects/${projectId}/runs`, body),
   getRun: (id) => json(`/api/runs/${id}`),
   approve: (id) => post(`/api/runs/${id}/approve`),
+  // Stop the build: ends the pipeline at its next agent boundary and keeps whatever it already published.
+  stopRun: (id) => post(`/api/runs/${id}/stop`),
   revise: (id, instruction, target) => post(`/api/runs/${id}/revise`, { instruction, target }),
   getHtml: async (id) => (await raw(`/api/runs/${id}/html`)).text(),
   screenshotUrl: async (id, vp) => URL.createObjectURL(await (await raw(`/api/runs/${id}/screenshots/${vp}`)).blob()),

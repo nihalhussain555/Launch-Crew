@@ -12,7 +12,8 @@ import { useRun } from "../hooks/useRun";
 import { useToast } from "../toast";
 
 /** Which stage of the pipeline a run's status puts it at. `awaiting_approval` is the human gate. */
-const STAGE_OF_STATUS = { queued: 0, running: 4, awaiting_approval: 7, deploying: 8, deployed: 8, failed: 4 };
+// A stop with no page is `cancelled`, and that is the same picture as a run that never got past queueing.
+const STAGE_OF_STATUS = { queued: 0, running: 4, awaiting_approval: 7, deploying: 8, deployed: 8, failed: 4, cancelled: 0 };
 
 /** Every way back into the pipeline, and the endpoint each one calls. */
 const ENTRIES = [

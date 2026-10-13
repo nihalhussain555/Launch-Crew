@@ -278,6 +278,12 @@ const PATHS = {
       <circle cx="7.4" cy="14.1" r="1" fill="currentColor" />
     </>
   ),
+  stop: (
+    <>
+      <circle cx="12" cy="12" r="8.4" />
+      <rect x="9.3" y="9.3" width="5.4" height="5.4" rx="1.1" fill="currentColor" stroke="none" />
+    </>
+  ),
 };
 
 export default function Icon({ name, size, strokeWidth, className = "" }) {

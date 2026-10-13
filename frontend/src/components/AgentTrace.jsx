@@ -26,6 +26,13 @@ function describe(ev) {
       body: `${d.audit.headline} Score ${d.audit.score}/100.`, tone: d.audit.errors ? "err" : d.audit.warnings ? "warn" : "ok" };
     case "screenshot_ready": return { icon: "eye", title: `Screenshot ready (${d.viewport})`, tone: "tool" };
     case "awaiting_approval": return { icon: "lock", title: "Waiting for your approval", body: d.message, tone: "warn" };
+    case "stop_requested": return { icon: "stop", title: "Stop requested", body: d.message, tone: "warn" };
+    case "stopped": {
+      // Where the stop landed and what the run had spent by then, straight from the pipeline's own event.
+      const where = d.agent ? `while ${cap(d.agent)} was working` : "at the next boundary";
+      const spent = d.steps ? `${d.steps} step(s) · ${(d.tokens_used ?? 0).toLocaleString()} tokens` : "";
+      return { icon: "stop", title: `Stopped ${where}`, body: d.message, meta: spent, tone: "warn" };
+    }
     case "deployed": return { icon: "rocket", title: "Deployed", body: d.url, tone: "ok" };
     case "failed": return { icon: "close", title: "Run failed", body: d.error, tone: "err" };
     default: return { icon: "sparkle", title: ev.type, tone: "" };

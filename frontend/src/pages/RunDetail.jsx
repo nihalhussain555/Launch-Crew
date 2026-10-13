@@ -23,11 +23,15 @@ import ScoreRing from "../components/ScoreRing";
 import ShareModal from "../components/ShareModal";
 import SocialPosts from "../components/SocialPosts";
 import StatusPill from "../components/StatusPill";
+import StopBuild from "../components/StopBuild";
 import Tabs from "../components/Tabs";
 import WorkspaceModal from "../components/WorkspaceModal";
 import { useRunStream } from "../hooks/useRunStream";
 
-const REFRESH_ON = new Set(["agent_message", "audit_report", "check_results", "awaiting_approval", "workspace_updated", "deployed", "failed"]);
+// The stream events that mean the run moved: re-read it so the page shows the new status, not the old one.
+// A stop lands here twice - once when it is asked for, once when the build actually ends.
+const REFRESH_ON = new Set(["agent_message", "audit_report", "check_results", "awaiting_approval", "workspace_updated",
+  "stop_requested", "stopped", "deployed", "failed"]);
 
 /** Workspace tools: every run is a set of files, a version history and a conversation. */
 const TOOLS = [
@@ -134,6 +138,7 @@ export default function RunDetail() {
         </div>
         <div className="row">
           {s.readiness && <ScoreRing value={s.readiness.total} size={72} stroke={8} onClick={() => setScoreOpen(true)} label="How is this scored?" />}
+          <StopBuild run={run} onChange={setRun} onRefresh={refresh} className="btn danger" />
           <button className="btn" disabled={!s.html_key} onClick={() => setShareOpen(true)}><Icon name="link" size={16} /> {shared ? "Shared" : "Share"}</button>
         </div>
       </div>

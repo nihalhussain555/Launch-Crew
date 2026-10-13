@@ -12,7 +12,9 @@ from app.core.deps import get_db, get_user_header_or_query
 
 router = APIRouter(prefix="/api/runs", tags=["stream"])
 POLL_S, KEEPALIVE_S, MAX_STREAM_S = 0.5, 15, 60 * 30
-FINAL = {"deployed", "failed"}
+# Statuses that end a run for good, and the event types that mean the same. `cancelled` is a Stop pressed
+# before anything was published: no later phase can run on that run, so its stream ends with it.
+FINAL = {"deployed", "failed", "cancelled"}
 
 
 def sse(event: dict) -> str:

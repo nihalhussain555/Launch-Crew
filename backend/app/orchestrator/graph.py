@@ -20,7 +20,7 @@ from app.agents.strategist import StrategistAgent
 from app.agents.base import looks_like_html
 from app.orchestrator import artifacts
 from app.orchestrator.readiness import compute_readiness
-from app.orchestrator.state import GuardrailError, RunContext
+from app.orchestrator.state import GuardrailError, RunCancelled, RunContext
 from app.services import change_impact, workspace_manager
 from app.tools.sanitizer import sanitize_html
 
@@ -61,16 +61,49 @@ class Orchestrator:
 
     async def _run(self, agent) -> None:
         ctx = self.ctx
+        await ctx.check_cancelled(f"before {agent.name} could start")   # a stop is never charged for a step
         ctx.next_step(agent.name)                       # guardrail: max steps
         await ctx.emit("agent_started", agent=agent.name)
         before = ctx.tokens_used
         try:
-            summary = await asyncio.wait_for(agent.run(ctx), timeout=ctx.settings.agent_timeout_s)  # guardrail: timeout
+            summary = await self._interruptibly(agent.run(ctx), agent.name)
         except asyncio.TimeoutError:
             raise GuardrailError(f"Agent '{agent.name}' timed out after {ctx.settings.agent_timeout_s:.0f}s") from None
         await ctx.emit("agent_message", agent=agent.name, message=summary,
                        tokens=ctx.tokens_used - before, total_tokens=ctx.tokens_used)
         await ctx.checkpoint()
+
+    async def _interruptibly(self, step, agent_name: str):
+        """Await one agent step, abandoning it the moment a Stop arrives.
+
+        This is the only place a stop is allowed to interrupt work, and it is safe because an agent's
+        output reaches the run only after this returns - the step's checkpoint, the page write and the
+        publish all happen later. What an abandoned step costs is the tokens it had already spent, which
+        stay counted against the run's budget, and nothing else.
+        """
+        ctx = self.ctx
+        task = asyncio.ensure_future(step)
+        if ctx.cancel_event is None:            # no stop watch (a phase that cannot be interrupted mid-step)
+            return await asyncio.wait_for(task, timeout=ctx.settings.agent_timeout_s)
+        wake = asyncio.ensure_future(ctx.cancel_event.wait())
+        done, pending = await asyncio.wait({task, wake}, timeout=ctx.settings.agent_timeout_s,
+                                           return_when=asyncio.FIRST_COMPLETED)
+        for leftover in pending:            # whichever half lost is not left running behind us
+            leftover.cancel()
+            await self._settle(leftover)
+        if not done:
+            raise asyncio.TimeoutError()
+        if wake in done:
+            raise RunCancelled(f"Stopped by you while {agent_name} was working.", agent=agent_name)
+        return task.result()
+
+    @staticmethod
+    async def _settle(task) -> None:
+        """Let a cancelled step finish dying, so its exception is not left unconsumed."""
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):     # noqa: BLE001 - the stop is the news, not this
+            pass
 
     async def _critic_loop(self) -> None:
         """Review -> route fixes -> rebuild, at most MAX_CRITIC_ITERATIONS reviews."""
@@ -90,6 +123,8 @@ class Orchestrator:
         if rerun_panel or not s.panel:
             try:
                 await self._run(PanelAgent())
+            except RunCancelled:
+                raise                            # the user asked for this build to end; a bonus agent cannot overrule it
             except Exception as exc:  # noqa: BLE001 - the panel is a bonus, not a gate
                 await ctx.emit("agent_message", agent="system", message=f"Audience panel skipped: {str(exc)[:160]}")
         s.readiness = compute_readiness(s)

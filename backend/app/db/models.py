@@ -82,6 +82,9 @@ class RunOut(BaseModel):
     state: dict[str, Any] = {}
     spec: dict[str, Any] = {}
     share_token: str | None = None
+    # True while a Stop has been asked for but the build has not reached its boundary yet, so the button
+    # can read "Stopping" after a reload instead of inviting a second press.
+    stop_requested: bool = False
     created_at: datetime
     updated_at: datetime | None = None
 
@@ -200,6 +203,7 @@ def run_out(doc: dict) -> RunOut:
         state=doc.get("state", {}),
         spec=doc.get("spec", {}),
         share_token=doc.get("share_token"),
+        stop_requested=bool(doc.get("cancel_requested")),
         created_at=_utc(doc["created_at"]),
         updated_at=_utc(doc.get("updated_at")),
     )

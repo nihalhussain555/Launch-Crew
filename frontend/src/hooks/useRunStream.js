@@ -2,8 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 
 export const EVENT_TYPES = ["agent_started", "agent_message", "tool_call", "rate_limited", "check_results", "critic_feedback",
-  "screenshot_ready", "awaiting_approval", "deployed", "failed"];
+  "screenshot_ready", "awaiting_approval", "stop_requested", "stopped", "deployed", "failed"];
 const FINAL = new Set(["deployed", "failed"]);
+
+/** A stop that leaves nothing to approve ends the run for good, so its stream is closed too. */
+const isFinal = (type, data) => FINAL.has(type) || (type === "stopped" && data.status === "cancelled");
 
 /** Live SSE connection. Replays history on connect, dedupes by seq, closes after a final event. */
 export function useRunStream(runId, onEvent) {
@@ -28,7 +31,7 @@ export function useRunStream(runId, onEvent) {
         const ev = { seq, type, data };
         setEvents((prev) => [...prev, ev]);
         cb.current?.(ev);
-        if (FINAL.has(type)) { es.close(); setConnected(false); }
+        if (isFinal(type, data)) { es.close(); setConnected(false); }
       })
     );
     return () => es.close();

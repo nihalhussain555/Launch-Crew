@@ -1,6 +1,8 @@
 const MAP = {
   queued: ["Queued", "warn"], running: ["Running", "warn"], awaiting_approval: ["Awaiting approval", "warn"],
   deploying: ["Deploying", "warn"], deployed: ["Deployed", "ok"], failed: ["Failed", "err"],
+  // Stopped by the user, with nothing published to approve. A decision, not a failure, so no error colour.
+  cancelled: ["Stopped", ""],
 };
 const LIVE = new Set(["queued", "running", "deploying"]);
 

@@ -12,6 +12,18 @@ class GuardrailError(Exception):
     """A configured guardrail (steps / tokens / timeout) stopped the run."""
 
 
+class RunCancelled(Exception):
+    """The user pressed Stop. Not a failure: everything the run already checkpointed stays.
+
+    `agent` names the step it landed in, so the stop can be reported as "Stopped while the engineer was
+    writing" rather than a bare end of process.
+    """
+
+    def __init__(self, message: str, *, agent: str = ""):
+        super().__init__(message)
+        self.agent = agent
+
+
 class BudgetExceeded(GuardrailError):
     pass
 
@@ -106,10 +118,12 @@ Checkpoint = Callable[["RunContext", "str | None"], Awaitable[None]]
 
 class RunContext:
     def __init__(self, *, run_id: str, settings, llm, state: RunState, sink: Sink, storage,
-                 checkpoint: Checkpoint | None = None, tokens_used: int = 0, steps: int = 0):
+                 checkpoint: Checkpoint | None = None, tokens_used: int = 0, steps: int = 0,
+                 cancel_event=None, cancel_probe: Callable[[], Awaitable[bool]] | None = None):
         self.run_id, self.settings, self.llm, self.state = run_id, settings, llm, state
         self.storage, self._sink, self._checkpoint = storage, sink, checkpoint
         self.tokens_used, self.steps = tokens_used, steps
+        self.cancel_event, self.cancel_probe = cancel_event, cancel_probe
 
     async def emit(self, type_: str, **data: Any) -> None:
         await self._sink(type_, data)
@@ -117,6 +131,19 @@ class RunContext:
     async def checkpoint(self, status: str | None = None) -> None:
         if self._checkpoint:
             await self._checkpoint(self, status)
+
+    # ---- stopping
+    async def check_cancelled(self, note: str = "") -> None:
+        """Raise if this run was asked to stop. Call at every boundary, never inside a write.
+
+        The in-process event is checked first because it is free and immediate; the flag on the run is
+        checked second because it is the only thing a worker that did not start this pipeline can see.
+        """
+        stopped = self.cancel_event is not None and self.cancel_event.is_set()
+        if not stopped and self.cancel_probe is not None:
+            stopped = await self.cancel_probe()
+        if stopped:
+            raise RunCancelled(f"Stopped by you{', ' + note if note else ''}.")
 
     # ---- guardrails
     def check_budget(self) -> None:
