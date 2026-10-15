@@ -52,7 +52,7 @@ export default function Login() {
 
           <div className="field-row">
             <span />
-            <a className="forgot" href="mailto:hello@launchcrew.app?subject=Password%20reset">Forgot password?</a>
+            <Link className="forgot" to={`/forgot-password${f.email.trim() ? `?email=${encodeURIComponent(f.email.trim())}` : ""}`}>Forgot password?</Link>
           </div>
 
           {err && <div className="error" role="alert">{err}</div>}

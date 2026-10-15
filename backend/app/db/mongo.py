@@ -26,3 +26,6 @@ async def ensure_indexes(db) -> None:
     await db.previews.create_index("token_hash", unique=True)
     await db.previews.create_index([("run_id", 1), ("exp", 1)])
     await db.previews.create_index("exp", expireAfterSeconds=0)
+    # Password reset links: the same digest lookup, and the same reaper for a link nobody redeemed.
+    await db.password_resets.create_index("token_hash", unique=True)
+    await db.password_resets.create_index("expires_at", expireAfterSeconds=0)

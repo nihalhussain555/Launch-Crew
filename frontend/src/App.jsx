@@ -11,6 +11,7 @@ import CodeWorkspace from "./pages/CodeWorkspace";
 import Dashboard from "./pages/Dashboard";
 import Deployments from "./pages/Deployments";
 import DesignSystem from "./pages/DesignSystem";
+import ForgotPassword from "./pages/ForgotPassword";
 import Home from "./pages/Home";
 import IdeHome from "./pages/IdeHome";
 import Integrations from "./pages/Integrations";
@@ -23,6 +24,7 @@ import Projects from "./pages/Projects";
 import PublicPreview from "./pages/PublicPreview";
 import Quality from "./pages/Quality";
 import Register from "./pages/Register";
+import ResetPassword from "./pages/ResetPassword";
 import RunDetail from "./pages/RunDetail";
 import Settings from "./pages/Settings";
 import Templates from "./pages/Templates";
@@ -56,6 +58,8 @@ export default function App() {
         <Route path="/legal/:slug" element={<Legal />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
       </Route>
 
       {/* authenticated product */}

@@ -43,6 +43,19 @@ class Settings(BaseSettings):
     tavily_api_key: str = ""
     netlify_auth_token: str = ""
 
+    # Password reset. The link goes to the browser app, which is a different origin from this API in
+    # development, so it is configured rather than guessed from the request headers.
+    app_base_url: str = "http://localhost:5173"
+    password_reset_ttl_minutes: int = 30
+    # With SMTP_HOST set, reset links are mailed; without it they are written to the server log.
+    # See app/services/password_reset.py for what each path does and what it tells the user.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_starttls: bool = True
+
     # Guardrails
     max_steps: int = 30
     max_token_budget: int = 150_000
@@ -87,6 +100,15 @@ class Settings(BaseSettings):
     @property
     def allowed_origins(self) -> list[str]:
         return [o.strip().rstrip("/") for o in self.allowed_origin.split(",") if o.strip()]
+
+    @property
+    def email_configured(self) -> bool:
+        """Enough SMTP settings to actually send. A host with no return address would fail on
+        the first message, so both are required rather than half a configuration."""
+        return bool(self.smtp_host.strip() and (self.smtp_from.strip() or self.smtp_user.strip()))
+
+    def reset_link(self, token: str) -> str:
+        return f"{self.app_base_url.strip().rstrip('/')}/reset-password?token={token}"
 
     @property
     def groq_key_pool(self) -> list[str]:

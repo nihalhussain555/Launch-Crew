@@ -3,22 +3,9 @@ import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { useToast } from "../toast";
 import { safeNext } from "../utils";
+import score, { LABELS } from "../password-strength";
 import AuthBrand from "../components/AuthBrand";
 import Icon from "../components/Icon";
-
-const LABELS = ["Too short", "Weak", "Fair", "Strong", "Excellent"];
-
-// Deterministic 0–4 score: length + character classes, no external lib.
-function score(pw) {
-  if (!pw) return 0;
-  let s = 0;
-  if (pw.length >= 8) s++;
-  if (pw.length >= 12) s++;
-  if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) s++;
-  if (/\d/.test(pw)) s++;
-  if (/[^A-Za-z0-9]/.test(pw)) s++;
-  return Math.min(4, pw.length < 8 ? 1 : s);
-}
 
 export default function Register() {
   const { user, register } = useAuth();

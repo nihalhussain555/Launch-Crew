@@ -28,6 +28,8 @@ GROUPS = {
                    "groq_vision_model", "llm_max_concurrency", "llm_max_retries", "llm_key_cooldown_s",
                    "llm_request_timeout_s", "llm_backoff_base_s", "llm_backoff_max_s"),
     "Tools": ("tavily_api_key", "netlify_auth_token"),
+    "Password reset": ("app_base_url", "password_reset_ttl_minutes", "smtp_host", "smtp_port",
+                       "smtp_user", "smtp_password", "smtp_from", "smtp_starttls"),
     "Guardrails": ("max_steps", "max_token_budget", "agent_timeout_s", "max_critic_iterations",
                    "tool_rounds_cap", "runs_per_hour", "max_revisions", "engineer_max_tokens",
                    "workspace_versions_keep", "preview_ttl_seconds", "preview_tickets_per_run"),
@@ -38,7 +40,8 @@ GROUPS = {
     "Project execution (IDE)": ("sandbox_runtime",),
 }
 REQUIRED = {"jwt_secret", "mongo_uri", "mongo_db", "allowed_origin"}
-SECRET = {"jwt_secret", "groq_api_key", "groq_api_keys", "tavily_api_key", "netlify_auth_token", "mongo_uri"}
+SECRET = {"jwt_secret", "groq_api_key", "groq_api_keys", "tavily_api_key", "netlify_auth_token", "mongo_uri",
+          "smtp_password"}
 # Placeholder text for the env template. Secret keys never show a real value, only this shape.
 EXAMPLES = {"jwt_secret": DEFAULT_JWT_SECRET, "mongo_uri": "mongodb://localhost:27017"}
 NOTES = {
@@ -59,6 +62,11 @@ NOTES = {
     "sandbox_runtime": "Names an intended sandbox runtime (docker/podman) for the IDE's status report. "
                        "No runner uses it yet, so setting it does not make Run work - this backend "
                        "executes no project code.",
+    "app_base_url": "Where a password-reset link points: the browser app's address, not this API's origin.",
+    "password_reset_ttl_minutes": "How long a reset link stays redeemable after it is issued.",
+    "smtp_host": "Empty means no mail service: reset links are then written to this server's log, and the "
+                 "forgot-password screen says so instead of promising an inbox.",
+    "smtp_password": "An app password for the mail account, not the mailbox login.",
 }
 
 

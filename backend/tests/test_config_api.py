@@ -94,7 +94,8 @@ def test_env_example_is_a_template_not_a_dump(client, auth):
 def configured(**kw) -> Settings:
     base = dict(mock_llm=False, groq_api_key="gsk_livekeyaaaaaaaaaaaaaaaaaaaa", groq_model="llama-model",
                 mongo_uri="mongodb://real-host:27017", jwt_secret="a-long-random-secret-value-9f3a2b",
-                tavily_api_key="tvly-somelongvaluehere123", netlify_auth_token="nfp_somelongtokenvalue123")
+                tavily_api_key="tvly-somelongvaluehere123", netlify_auth_token="nfp_somelongtokenvalue123",
+                smtp_password="smtp_livepasswordeeeeeeeeeeeeee")
     base.update(kw)
     return Settings(**base)
 

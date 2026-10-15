@@ -41,6 +41,8 @@ export const api = {
   register: (b) => post("/api/auth/register", b),
   login: (b) => post("/api/auth/login", b),
   me: () => json("/api/auth/me"),
+  forgotPassword: (email) => post("/api/auth/forgot-password", { email }),
+  resetPassword: (token, password) => post("/api/auth/reset-password", { token, password }),
   stats: () => json("/api/stats"),
   listProjects: () => json("/api/projects"),
   createProject: (idea, spec = {}, name = "") => post("/api/projects", { idea, name, spec }),

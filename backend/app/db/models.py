@@ -20,6 +20,22 @@ class UserLogin(BaseModel):
     password: str
 
 
+class ForgotIn(BaseModel):
+    email: str = Field(max_length=254)
+
+
+class ForgotOut(BaseModel):
+    """What a forgot-password request answers with. `channel` describes how this server delivers a
+    link at all, never whether the address given belongs to anyone."""
+    message: str
+    channel: str
+
+
+class ResetIn(BaseModel):
+    token: str = Field(min_length=16, max_length=200)
+    password: str = Field(min_length=8, max_length=72)
+
+
 class UserOut(BaseModel):
     id: str
     email: str
