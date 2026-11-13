@@ -579,7 +579,8 @@ class IdePatchChange(BaseModel):
 
     `workspace_manager.validate_patch` stays the authority on what an edit means; this only bounds the
     shape, so a model cannot hand back a megabyte of text or an operation no pipeline knows. The op list
-    and the 12-change cap mirror `workspace_manager.OPS` and `validate_changes`.
+    and the 12-change cap mirror `workspace_manager.OPS`, plus `create` - which is not a patch and is
+    checked by `ide_assistant` against `validate_authored` instead.
     """
     file: Annotated[str, Field(min_length=1, max_length=64)]
     op: str = "replace"
@@ -592,16 +593,16 @@ class IdePatchChange(BaseModel):
     @classmethod
     def _op(cls, v):
         op = str(v or "replace").strip().lower()
-        if op not in {"replace", "replace_all", "append", "set"}:
+        if op not in {"replace", "replace_all", "append", "set", "create"}:
             raise ValueError(f"'{op}' is not an edit this workspace accepts - choose replace, "
-                             f"replace_all, append or set")
+                             f"replace_all, append, set, or create for a file that does not exist yet")
         return op
 
     @model_validator(mode="after")
     def _has_something_to_write(self):
         if self.op in ("replace", "replace_all") and not self.find.strip():
             raise ValueError("a patch needs `find`: text that is really in that file")
-        if self.op in ("append", "set") and not (self.text or self.replace).strip():
+        if self.op in ("append", "set", "create") and not (self.text or self.replace).strip():
             raise ValueError(f"'{self.op}' needs the text to write")
         return self
 

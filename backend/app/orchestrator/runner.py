@@ -250,16 +250,23 @@ async def visual_apply_pipeline(app_state, run_id: str, changes: list[dict], req
 
 
 async def ide_apply_pipeline(app_state, run_id: str, changes: list[dict], request: str,
-                             proposal_id: str) -> None:
+                             proposal_id: str, creates: list[dict] | None = None) -> None:
     """Apply a reviewed assistant edit and write the outcome back on the proposal (POST /ide/apply).
 
     Same pipeline as a typed or clicked patch - checkpoint, sanitizer, publish, Chromium checks, readiness -
     because an AI patch gets no free pass. The proposal is marked from the plan the pipeline recorded, and a
     failure says so on the proposal instead of leaving the page mid-change.
+
+    `creates` are new files the same proposal added. They ride `authored`, which is the pipeline's own
+    rollback: if the page change is refused the file set goes back to what it was, so a proposal never
+    lands half of itself.
     """
+    authored = [{"name": c["file"], "text": c["text"], "note": c["note"], "source": "assistant"}
+                for c in creates or []]
     ctx = await ctx_for(app_state, run_id)
     try:
-        plan = await Orchestrator(ctx).apply_workspace_changes(changes, request, kind="assistant edit")
+        plan = await Orchestrator(ctx).apply_workspace_changes(changes, request, kind="assistant edit",
+                                                               authored=authored)
         entry = ide_assistant.find_entry(ctx.state, proposal_id)
         entry["plan"] = plan["id"]
         ide_assistant.mark_proposal(entry, "applied", **plan["result"])

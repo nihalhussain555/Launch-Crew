@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from app.agents.base import AgentOutputError
 from app.agents.ide_assistant import IdeAssistantAgent
 from app.api.routes_runs import own_run
-from app.api.routes_workspace import BUSY, _ctx, _diff_pair, _fail
+from app.api.routes_workspace import BUSY, _ctx, _diff_pair, _fail, _store_files
 from app.core.deps import get_current_user, get_db, get_settings_dep
 from app.db.models import RunOut, oid, run_out
 from app.orchestrator import runner
@@ -182,17 +182,25 @@ MAX_MODEL_REASON = 300
 
 
 class AskIn(BaseModel):
-    """The request, the files the user means, and the version the editor is showing."""
+    """The request, the files the user means, and the version the editor is showing.
+
+    `active_file` and `selection` are what the editor is showing and what the user has highlighted. They
+    are context, not scope: they rank a file to the front of the set that gets sent, they do not add a
+    file the reviewer did not tick.
+    """
     instruction: str = Field(min_length=3, max_length=500)
     files: list[str] = Field(default_factory=list, max_length=ide_assistant.MAX_FILES_SENT)
     base_version: int | None = None
+    active_file: str = Field(default="", max_length=64)
+    selection: str = Field(default="", max_length=ide_assistant.MAX_SELECTION_CHARS)
 
 
 class ProposalIn(BaseModel):
-    """Which proposal, and the version the reviewer was reading when they decided."""
+    """Which proposal, the files of it the reviewer accepted, and the version they were reading."""
     id: str = Field(min_length=1, max_length=12)
     reason: str = Field(default="", max_length=200)
     base_version: int | None = None
+    files: list[str] = Field(default_factory=list, max_length=12)
 
 
 async def _workspace_texts(ctx) -> dict[str, str]:
@@ -218,7 +226,8 @@ async def assistant_plan(run_id: str, body: AskIn, request: Request, db=Depends(
     try:
         workspace_manager.check_base(ctx.state, body.base_version)
         texts = await _workspace_texts(ctx)
-        picked, clipped = ide_assistant.choose(texts, body.instruction, body.files)
+        active = body.active_file if body.active_file in texts else ""
+        picked, clipped = ide_assistant.choose(texts, body.instruction, body.files, active=active)
         if not picked:
             raise WorkspaceError("This workspace has no files the assistant can read, so there is nothing "
                                  "to edit. Build the page first.", 409)
@@ -226,13 +235,22 @@ async def assistant_plan(run_id: str, body: AskIn, request: Request, db=Depends(
         report = change_impact.analyze(index, body.instruction, version=ctx.state.html_version)
         ctx.state.impact = report
         ask = ide_assistant.prompt(instruction=body.instruction, texts=texts, picked=picked, clipped=clipped,
-                                   impact=report.get("block") or "")
+                                   impact=report.get("block") or "", active=active, selection=body.selection)
         try:
             verified = await IdeAssistantAgent().patch(ctx, user=ask, texts=texts, allowed=picked)
         except AgentOutputError as exc:
             raise WorkspaceError(f"The assistant produced no edit that fits these files: "
                                  f"{str(exc)[:MAX_MODEL_REASON]}", 502) from exc
-        before, after, _page = await workspace_manager.prepare_changes(ctx, verified["changes"])
+        # A proposal that only adds files moves the file set, not the page, so there is nothing to fold,
+        # sanitize or re-measure against `index.html`. Reading the workspace is all the proof it needs.
+        if verified["changes"]:
+            before, after, _page = await workspace_manager.prepare_changes(ctx, verified["changes"])
+        else:
+            before = await _workspace_texts(ctx)
+            after = dict(before)
+        for item in verified["creates"]:
+            before.setdefault(item["file"], "")
+            after[item["file"]] = item["text"]
     except WorkspaceError as exc:
         _fail(exc)
 
@@ -240,8 +258,10 @@ async def assistant_plan(run_id: str, body: AskIn, request: Request, db=Depends(
     diffs = {name: _diff_pair(before.get(name, ""), after.get(name, ""), f"before/{name}", f"after/{name}")
              for name in projection["changed"]}
     rows = ide_assistant.affected(verified)
-    entry = ide_assistant.record_proposal(ctx, instruction=body.instruction, verified=verified, rows=rows,
-                                          report=report, sent=picked, clipped=clipped)
+    entry = ide_assistant.record_proposal(
+        ctx, instruction=body.instruction, verified=verified, rows=rows, report=report, sent=picked,
+        clipped=clipped,
+        context={"active_file": active, "has_selection": bool(active and body.selection.strip())})
     await db.runs.update_one({"_id": oid(run_id)}, {"$set": {
         "state.ide_edits": ctx.state.ide_edits, "state.impact": ctx.state.impact,
         "updated_at": runner.now()}})
@@ -250,11 +270,15 @@ async def assistant_plan(run_id: str, body: AskIn, request: Request, db=Depends(
             "sent_files": picked, "clipped_files": clipped,
             "base_version": ctx.state.html_version, "undo": workspace_manager.undo_status(ctx.state),
             "safe_to_apply": not report["counts"]["errors"],
-            "applies_through": "the patch pipeline: a checkpoint first, then the sanitizer, the Chromium "
-                               "checks and a new page version",
+            "applies_through": ("the file store: a new file is snapshotted and listed, and the page is not "
+                                "rebuilt, so no revision is spent" if not verified["changes"]
+                                else "the patch pipeline: a checkpoint first, then the sanitizer, the "
+                                     "Chromium checks and a new page version"),
             "limits": {"max_changes": 12, "max_instruction_chars": ide_assistant.MAX_INSTRUCTION_CHARS,
                        "max_files_sent": ide_assistant.MAX_FILES_SENT,
+                       "max_new_files": ide_assistant.MAX_NEW_FILES,
                        "revisions_left": max(settings.max_revisions - ctx.state.revisions, 0)}}
+
 
 
 @arouter.get("/proposals")
@@ -267,17 +291,16 @@ async def assistant_proposals(run_id: str, db=Depends(get_db), user=Depends(get_
 
 @arouter.post("/apply", response_model=RunOut, status_code=202)
 async def assistant_apply(run_id: str, body: ProposalIn, request: Request, background: BackgroundTasks,
-                          db=Depends(get_db), settings=Depends(get_settings_dep), user=Depends(get_current_user)):
-    """Write a proposal the user has read. Re-measured here: it must still mean the edit that was approved.
+                          db=Depends(get_db), settings=Depends(get_settings_dep),
+                          user=Depends(get_current_user)):
+    """Write a proposal - or the named part of it - the user has read. Re-measured here before anything moves.
 
     The stored change set is applied to the current text again before anything is claimed, so a file that
-    moved since the proposal was made produces a conflict rather than a silent overwrite. The page rebuild
-    that follows is the workspace pipeline's own, and it is the run's approval gate that lets it start.
+    moved since the proposal was made produces a conflict rather than a silent overwrite. A proposal that
+    only adds files skips the pipeline: the page is not touched, so there is nothing to sanitize, publish
+    or re-check, and no revision to spend - it is written the way the Explorer writes a new file.
     """
     run = await own_run(db, run_id, user)
-    if run.get("state", {}).get("revisions", 0) >= settings.max_revisions:
-        raise HTTPException(429, f"Revision limit reached ({settings.max_revisions} per run). Approve this "
-                                 f"version or start a new run.")
     ctx = await _ctx(request, db, run_id, user)
     try:
         entry = ide_assistant.find_entry(ctx.state, body.id)
@@ -289,16 +312,59 @@ async def assistant_apply(run_id: str, body: ProposalIn, request: Request, backg
             raise WorkspaceError(f"Conflict: proposal {entry['id']} was read at v{entry.get('version')} but "
                                  f"the page is now v{ctx.state.html_version}. Ask again to see the change "
                                  f"against what is stored.", 409)
+        changes, creates = ide_assistant.select(entry, body.files)
+        accepted = sorted({c["file"] for c in changes} | {c["file"] for c in creates})
+        # Both branches keep the decision in `result`, beside the version each file ended up at, so one
+        # proposal reads the same whether it rebuilt the page or only added to the file set.
+        skipped = sorted(set(entry.get("files") or []) - set(accepted))
         texts = await _workspace_texts(ctx)
-        # Re-measured against the scope the reviewer actually read: a proposal that edits a file which was
-        # never sent could not have been reviewed, whatever the stored change set says.
-        verified = ide_assistant.verify({"summary": entry.get("summary") or "", "changes": entry["changes"]},
-                                        texts, allowed=entry.get("sent_files"))
-        await workspace_manager.prepare_changes(ctx, verified["changes"])
+        for item in creates:
+            if item["file"] in texts:
+                raise WorkspaceError(f"Conflict: {item['file']} now exists in this workspace, so proposal "
+                                     f"{entry['id']} can no longer create it. Reload the file list.", 409)
+        if changes:
+            if run.get("state", {}).get("revisions", 0) >= settings.max_revisions:
+                raise WorkspaceError(f"Revision limit reached ({settings.max_revisions} per run). Approve "
+                                     f"this version or start a new run.", 429)
+            # Re-measured against the scope the reviewer actually read: a proposal that edits a file which
+            # was never sent could not have been reviewed, whatever the stored change set says.
+            verified = ide_assistant.verify({"summary": entry.get("summary") or "",
+                                             "changes": changes + [{"file": c["file"], "op": "create",
+                                                                    "text": c["text"], "note": c["note"]}
+                                                                   for c in creates]},
+                                            texts, allowed=entry.get("sent_files"))
+            await workspace_manager.prepare_changes(ctx, verified["changes"])
     except WorkspaceError as exc:
         _fail(exc)
 
-    ide_assistant.mark_proposal(entry, "applying")
+    if not changes:
+        # New files only: store them the way the Explorer does, one snapshot each, no page rebuild.
+        ide_assistant.mark_proposal(entry, "applying", applied_files=accepted, skipped_files=skipped)
+        written = []
+        try:
+            for item in creates:
+                result = await workspace_manager.create_file(ctx, item["file"], item["text"],
+                                                             note=item["note"] or "Written by the assistant.")
+                written.append(result["file"]["name"])
+                # Persisted per file: a refusal on the third name leaves the first two stored, listed and
+                # undoable rather than half-written in memory and lost when the request ends.
+                await _store_files(db, run_id, ctx, action="create", name=result["file"]["name"])
+        except WorkspaceError as exc:
+            # The proposal goes back to `proposed` with the reason, so the reviewer sees the refusal rather
+            # than a record that claims an edit the workspace did not receive.
+            ide_assistant.mark_proposal(entry, "proposed", error=exc.message)
+            await db.runs.update_one({"_id": oid(run_id)},
+                                     {"$set": {"state.ide_edits": ctx.state.ide_edits}})
+            _fail(exc)
+        snapshot = ctx.state.workspace_versions[-1]["w"] if ctx.state.workspace_versions else 0
+        ide_assistant.mark_proposal(entry, "applied", files=written, applied_files=accepted,
+                                    skipped_files=skipped, workspace_version=snapshot)
+        await db.runs.update_one({"_id": oid(run_id)},
+                                 {"$set": {"state.ide_edits": ctx.state.ide_edits,
+                                           "updated_at": runner.now()}})
+        return run_out(await own_run(db, run_id, user))
+
+    ide_assistant.mark_proposal(entry, "applying", applied_files=accepted, skipped_files=skipped)
     await db.runs.update_one({"_id": oid(run_id)},
                              {"$set": {"state.ide_edits": ctx.state.ide_edits, "updated_at": runner.now()}})
     if not await runner.claim_for_revision(db, run_id, str(user["_id"])):
@@ -307,8 +373,8 @@ async def assistant_apply(run_id: str, body: ProposalIn, request: Request, backg
                                  {"$set": {"state.ide_edits": ctx.state.ide_edits}})
         raise HTTPException(409, "Run is not awaiting approval - the assistant applies its edit at the "
                                  "review gate, where a page can be rebuilt.")
-    background.add_task(runner.ide_apply_pipeline, request.app.state, run_id, verified["changes"],
-                        entry["instruction"], entry["id"])
+    background.add_task(runner.ide_apply_pipeline, request.app.state, run_id, changes,
+                        entry["instruction"], entry["id"], creates)
     return run_out(await own_run(db, run_id, user))
 
 

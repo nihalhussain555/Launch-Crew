@@ -1,9 +1,11 @@
 /* The assistant in the IDE's right column: plain English in, a measured diff out, nothing written until
-   the reviewer says so.
+   the reviewer says so - and then only the files they ticked.
    There is no second AI here. `/ide/plan` asks the same crew agent the review gate asks, against the same
    stored files the tabs show, and `/ide/apply` hands the change to the same patch pipeline a typed change
    takes - checkpoint first, sanitizer and Chromium checks after, one revision spent. So "applied as v9,
    restores from w9" means exactly what it means on the workspace page.
+   A proposal may also add a file the workspace does not hold yet. That one skips the rebuild: the page was
+   not touched, so no revision is spent and the write is the Explorer's own, undoable the same way.
    The model sees only file contents it was given and can only name those files back; keys stay server-side. */
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
@@ -20,61 +22,84 @@ const SUGGESTIONS = [
   "Tighten the spacing in the sign-up section.",
   "Make the primary button's hover state clearer.",
   "Shorten the hero headline without changing its meaning.",
+  "Add a contact page with a form.",
 ];
 
 /** Which files the model is shown: the ones ticked, or the ones the request names. */
 const scopeHint = (scope) => (scope.length
   ? `Only these will be sent: ${scope.join(", ")}.`
-  : "Nothing ticked: files the request names are sent first, then the page itself, until the size budget is full.");
+  : "Nothing ticked: the file you have open goes first, then the files the request names, then the page "
+    + "itself, until the size budget is full.");
 
 export default function AssistantPanel({ runId, version, files = [], editable, working, undo,
-                                         setRun, refresh, onClose }) {
+                                         setRun, refresh, onClose, contextOf }) {
   const toast = useToast();
   const [instruction, setInstruction] = useState("");
   const [scope, setScope] = useState([]);
   const [plan, setPlan] = useState(null);
+  const [picked, setPicked] = useState([]);        // the files of the proposal the reviewer will accept
   const [ack, setAck] = useState(false);
   const [note, setNote] = useState("");
-  const [list, setList] = useState([]);
+  const [history, setHistory] = useState([]);
   const [mode, setMode] = useState("unified");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
 
   const loadList = useCallback(() => {
-    if (!runId) { setList([]); return; }
-    api.ideAssistantProposals(runId).then((d) => setList(d.proposals || [])).catch(() => setList([]));
+    if (!runId) { setHistory([]); return; }
+    api.ideAssistantProposals(runId).then((d) => setHistory(d.proposals || [])).catch(() => setHistory([]));
   }, [runId]);
 
   useEffect(() => { loadList(); }, [loadList, version]);
 
   // The page moved underneath a proposal the reviewer may still be reading: drop it rather than let them
   // apply a diff that no longer describes the stored bytes. /ide/apply would refuse it anyway.
-  useEffect(() => { setPlan(null); }, [version]);
+  useEffect(() => { setPlan(null); setPicked([]); }, [version]);
 
   const maxFiles = plan?.limits?.max_files_sent || 8;
   const names = files.map((f) => f.name);
+  // Re-read on each render: the shell re-renders as the cursor moves, so this tracks what the user is on.
+  const live = contextOf ? contextOf() : {};
 
   const toggleScope = (name) => setScope((s) => (s.includes(name) ? s.filter((n) => n !== name)
     : s.length >= maxFiles ? s : [...s, name]));
+
+  const togglePick = (name) => setPicked((p) => (p.includes(name) ? p.filter((n) => n !== name) : [...p, name]));
 
   const ask = async (e) => {
     e?.preventDefault();
     const text = instruction.trim();
     if (text.length < 3) return;
-    setBusy("plan"); setPlan(null); setErr(""); setAck(false);
+    setBusy("plan"); setPlan(null); setPicked([]); setErr(""); setAck(false);
     try {
-      setPlan(await api.ideAssistantPlan(runId, { instruction: text, files: scope, base_version: version }));
+      const p = await api.ideAssistantPlan(runId, {
+        instruction: text, files: scope, base_version: version,
+        active_file: live.file || "", selection: live.selection || "",
+      });
+      setPlan(p);
+      setPicked((p.affected || []).map((a) => a.file));   // everything offered, until the reviewer says otherwise
       // A proposal exists on the run now, whether or not this panel stays open to read it.
       loadList();
     } catch (ex) { setErr(ex.message); } finally { setBusy(""); }
   };
 
+  const offered = plan ? (plan.affected || []).map((a) => a.file) : [];
+  const partial = picked.length > 0 && picked.length < offered.length;
+  // Adding a file leaves the page alone, so the pipeline that rebuilds it is not what this proposal costs -
+  // which means it does not have to wait at the approval gate either, only for the crew to be idle.
+  const addsOnly = !!plan && !(plan.proposal.changes || []).length && !!(plan.proposal.creates || []).length;
+  const canWrite = !working && (editable || addsOnly);
+
   const apply = async () => {
     setBusy("apply");
     try {
-      setRun(await api.ideAssistantApply(runId, { id: plan.proposal.id, base_version: plan.base_version }));
-      toast("Change queued — checkpoint first, then the page rebuilds and re-checks", "success");
-      setPlan(null); setInstruction(""); setNote(""); setAck(false);
+      // An empty list means "the whole proposal"; a named subset is what the reviewer actually accepted.
+      setRun(await api.ideAssistantApply(runId, { id: plan.proposal.id, base_version: plan.base_version,
+                                                  files: partial ? picked : [] }));
+      toast(addsOnly ? "New file written beside the page — the page was not rebuilt, so no revision was spent"
+        : partial ? `${picked.join(", ")} applied — the rest was left out`
+          : "Change queued — checkpoint first, then the page rebuilds and re-checks", "success");
+      setPlan(null); setPicked([]); setInstruction(""); setNote(""); setAck(false);
       await refresh();
       loadList();
     } catch (ex) { toast(ex.message, "error"); } finally { setBusy(""); }
@@ -114,6 +139,14 @@ export default function AssistantPanel({ runId, version, files = [], editable, w
             aria-label="Close the assistant panel"><Icon name="close" size={14} /></button>
         </span>
       </div>
+
+      <p className="muted small ide-ai-context">
+        {live.file ? <>Reading <strong className="mono">{live.file}</strong>
+          {live.selection
+            ? <> · {live.selection.split("\n").length} selected line(s) go with the request</>
+            : <> · nothing selected, so the whole file is the context</>}</>
+          : "No file open — the assistant picks the files your request names."}
+      </p>
 
       <form className="stack" onSubmit={ask}>
         <label className="stack">Ask for a change
@@ -167,7 +200,9 @@ export default function AssistantPanel({ runId, version, files = [], editable, w
           <div className="row wrap ide-ai-pills">
             <span className="pill mono">{plan.proposal.id}</span>
             <span className="pill">v{plan.base_version}</span>
-            <span className="pill">{plan.proposal.changes.length} change(s)</span>
+            <span className="pill">{offered.length} file(s)</span>
+            {!!(plan.proposal.creates || []).length && (
+              <span className="pill ok">+{(plan.proposal.creates || []).length} new</span>)}
             <span className="pill">+{plan.projection.lines_added} -{plan.projection.lines_removed}</span>
             <span className="pill">{plan.limits.revisions_left} revision(s) left</span>
           </div>
@@ -175,10 +210,16 @@ export default function AssistantPanel({ runId, version, files = [], editable, w
 
           <ul className="ide-ai-affected">
             {plan.affected.map((a, i) => (
-              <li key={`${a.file}-${i}`}>
+              <li key={`${a.file}-${i}`} className={picked.includes(a.file) ? "" : "is-out"}>
                 <div className="row wrap">
+                  <label className="ide-check" title={offered.length > 1
+                    ? "Include this file in what gets written" : "The only file this proposal offers"}>
+                    <input type="checkbox" checked={picked.includes(a.file)} disabled={!!busy}
+                      onChange={() => togglePick(a.file)}
+                      aria-label={`Accept the change to ${a.file}`} />
+                  </label>
                   <strong className="mono">{a.file}</strong>
-                  <span className="pill">{a.op}</span>
+                  <span className={`pill ${a.op === "create" ? "ok" : ""}`}>{a.op}</span>
                   <span className={`pill ${a.save_via ? "" : "warn"}`}>{a.kind}</span>
                   <span className="muted small">+{a.lines_added} -{a.lines_removed}</span>
                 </div>
@@ -228,9 +269,15 @@ export default function AssistantPanel({ runId, version, files = [], editable, w
 
           <div className="row wrap">
             <button className="btn primary small" onClick={apply}
-              disabled={!editable || !!busy || (!plan.safe_to_apply && !ack)}>
-              <Icon name="check" size={14} /> {busy === "apply" ? "Queuing…" : "Accept and apply"}
+              disabled={!canWrite || !!busy || !picked.length || (!plan.safe_to_apply && !ack)}>
+              <Icon name="check" size={14} /> {busy === "apply" ? "Writing…"
+                : partial ? `Accept ${picked.length} of ${offered.length} file(s)` : "Accept and apply"}
             </button>
+            {offered.length > 1 && (
+              <button className="btn ghost small" disabled={!!busy}
+                onClick={() => setPicked(picked.length === offered.length ? [] : offered)}>
+                {picked.length === offered.length ? "Clear the selection" : "Select every file"}
+              </button>)}
             <button className="btn ghost small" onClick={reject} disabled={!!busy}>
               <Icon name="close" size={14} /> {busy === "reject" ? "…" : "Reject"}
             </button>
@@ -238,10 +285,15 @@ export default function AssistantPanel({ runId, version, files = [], editable, w
               <Icon name="refresh" size={14} /> Revise the request
             </button>
           </div>
-          <p className="muted small">Accepting hands the change to {plan.applies_through}, so it spends one of
-            this run's revisions{editable ? "" : " and needs the run back at the approval gate"}
-            {working ? " — it is working now." : "."} A snapshot of the state being left is taken first, which
-            is what the undo below restores.</p>
+          <p className="muted small">
+            {addsOnly
+              ? <>Accepting writes through {plan.applies_through}. No page file moves, so this costs no
+                  revision of its own.</>
+              : <>Accepting hands the change to {plan.applies_through}. It spends one of this
+                  run&apos;s revisions{editable ? "" : " and needs the run back at the approval gate"}
+                  {working ? " — it is working now." : "."}</>}
+            {" "}A snapshot of the state being left is taken first, which is what the undo below restores.
+          </p>
         </section>
       )}
 
@@ -260,10 +312,10 @@ export default function AssistantPanel({ runId, version, files = [], editable, w
             <Link className="muted small" to="/versions">Version history</Link>
           </span>
         </div>
-        {!list.length && <p className="muted small">None yet. A proposal is recorded whether you accept it,
+        {!history.length && <p className="muted small">None yet. A proposal is recorded whether you accept it,
           reject it, or leave it unread — and it writes nothing until you accept.</p>}
         <ul className="plan-list">
-          {list.map((p) => (
+          {history.map((p) => (
             <li key={p.id} className={`plan-item ${p.status === "applied" ? "applied"
               : p.status === "rejected" ? "rejected" : "pending"}`}>
               <div className="row wrap between">
@@ -281,6 +333,7 @@ export default function AssistantPanel({ runId, version, files = [], editable, w
                 {p.result?.version ? ` · applied as v${p.result.version}` : ""}
                 {p.result?.workspace_version ? ` · restores from w${p.result.workspace_version}` : ""}
                 {p.result?.check_errors != null ? ` · ${p.result.check_errors} check error(s)` : ""}
+                {p.result?.skipped_files?.length ? ` · left out: ${p.result.skipped_files.join(", ")}` : ""}
                 {p.result?.reason ? ` · “${p.result.reason}”` : ""}
                 {p.result?.error ? ` · ${p.result.error}` : ""}
                 {p.clipped_files?.length ? ` · clipped: ${p.clipped_files.join(", ")}` : ""}</p>

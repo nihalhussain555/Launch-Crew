@@ -26,7 +26,14 @@ const VIEWS = [
   { id: "settings", label: "IDE settings", icon: "gear" },
 ];
 const PREFS_KEY = "lc_ide_prefs";
-const DEFAULT_PREFS = { fontSize: 13.5, wordWrap: false, minimap: false, tabSize: 2 };
+// The three panel sizes are CSS custom properties on the shell, so a drag writes one number and the grid
+// re-flows. BOUND keeps a panel readable when someone drags a grip hard; CAP mirrors the min() caps the
+// stylesheet puts on the same properties, so a drag stops where the panel does on a narrow screen.
+const DEFAULT_PREFS = { fontSize: 13.5, wordWrap: false, minimap: false, tabSize: 2, autosave: true,
+                        sideW: 290, aiW: 380, bottomH: 190 };
+const BOUND = { sideW: [190, 560], aiW: [300, 680], bottomH: [120, 520] };
+const CAP = { sideW: 0.30, aiW: 0.34, bottomH: 0.45 };
+const clamp = (v, [lo, hi]) => Math.min(hi, Math.max(lo, Math.round(v)));
 
 const readPrefs = () => {
   try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") }; }
@@ -48,6 +55,7 @@ export default function Ide() {
   const { run, setRun, err, refresh, working } = useRun(runId);
   const { events, connected } = useRunStream(runId);
   const editor = useRef(null);
+  const shell = useRef(null);
 
   const [overview, setOverview] = useState(null);
   const [dataErr, setDataErr] = useState("");
@@ -66,6 +74,8 @@ export default function Ide() {
   const [aiOpen, setAiOpen] = useState(false);
   const [pendingJump, setPendingJump] = useState(null);
   const [prefs, setPrefs] = useState(readPrefs);
+  const [dragging, setDragging] = useState("");
+  const [autosaved, setAutosaved] = useState(null);   // {name, at} - the status bar's own record
 
   const version = run?.state?.html_version ?? overview?.version ?? 0;
   const editable = run?.status === "awaiting_approval";
@@ -111,6 +121,69 @@ export default function Ide() {
   }, [overview, runId]);
 
   useEffect(() => { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); }, [prefs]);
+
+  /**
+   * Drag a panel boundary. A grip knows only which size it owns and which way the pointer grows it: it
+   * measures the move from where the drag started rather than from the shell's edge, so the activity bar,
+   * an open AI panel or a collapsed file list never shift the numbers. The grid re-flows from the one
+   * value that changes, so Monaco, the preview and the terminal all resize without being told.
+   */
+  const grip = (key, dir) => (event) => {
+    event.preventDefault();
+    const node = shell.current;
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    const room = (dir === "y" ? rect.height : rect.width) * CAP[key];
+    const px = event.clientX;
+    const py = event.clientY;
+    const start = prefs[key];
+    setDragging(key);
+    const move = (e) => {
+      const d = dir === "x" ? e.clientX - px : dir === "y" ? py - e.clientY : px - e.clientX;
+      const value = clamp(Math.min(start + d, room), BOUND[key]);
+      setPrefs((p) => (p[key] === value ? p : { ...p, [key]: value }));
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setDragging("");
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+    document.body.style.cursor = dir === "y" ? "row-resize" : "col-resize";
+    document.body.style.userSelect = "none";
+  };
+
+  // Keyboard parity for the same drag: right/up grows the panel, left/down shrinks it, whichever edge it is.
+  const nudge = (key) => (event) => {
+    const step = { ArrowRight: 16, ArrowUp: 16, ArrowLeft: -16, ArrowDown: -16 }[event.key];
+    if (!step) return;
+    event.preventDefault();
+    setPrefs((p) => ({ ...p, [key]: clamp(p[key] + step, BOUND[key]) }));
+  };
+
+  // A double-click puts the panel back where the product put it, without hunting through settings.
+  const resetGrip = (key) => setPrefs((p) => ({ ...p, [key]: DEFAULT_PREFS[key] }));
+
+  /** What the assistant should assume the user means: the open tab, and the part of it that is lit up. */
+  const assistantContext = useCallback(() => ({
+    file: preview || !active ? "" : active,
+    selection: preview ? "" : editor.current?.selection() || "",
+  }), [active, preview]);
+
+  /**
+   * What the assistant calls when a decision has moved the workspace. Re-reading the file list is part of
+   * it: an added file, a stepped-back snapshot or a deletion leaves `html_version` where it was, so the
+   * listing effect below cannot be the only thing that refreshes the Explorer.
+   */
+  const assistantRefresh = useCallback(async () => {
+    await load();
+    await refresh();
+  }, [load, refresh]);
 
   // The editor is display:none while the preview is up and re-measures itself when it comes back.
   useEffect(() => {
@@ -184,6 +257,30 @@ export default function Ide() {
   }, [docs, runId, version, editable, run?.status, toast, setRun]);
 
   const saveActive = useCallback(() => { if (active && !preview) saveFile(active); }, [active, preview, saveFile]);
+
+  /**
+   * Autosave covers the files a save costs nothing: source stored beside the page, written back as the
+   * bytes stand. A page file (`index.html`, `styles.css`, `app.js`) is never auto-saved - that save is a
+   * rebuild which spends one of the run's revisions and re-runs the browser checks, and nobody should
+   * lose a revision to a keystroke pause. A file the server has moved under is skipped too: the digest
+   * the save must carry is stale, so the writer would be refused mid-flight anyway.
+   */
+  const tried = useRef({});                          // name -> the text the last autosave attempt held
+  useEffect(() => {
+    if (!prefs.autosave) return undefined;
+    const timers = [];
+    Object.entries(dirty).forEach(([name, is]) => {
+      const doc = docs[name];
+      if (!is || !doc || doc.save_via !== "save" || doc.stale) return;
+      const text = editor.current?.text(name);
+      if (!text || tried.current[name] === text) return;
+      timers.push(setTimeout(() => {
+        tried.current[name] = text;
+        saveFile(name, { quiet: true }).then((ok) => { if (ok) setAutosaved({ name, at: Date.now() }); });
+      }, 1500));
+    });
+    return () => timers.forEach(clearTimeout);
+  }, [dirty, docs, prefs.autosave, saveFile]);
 
   const saveAll = useCallback(async () => {
     const list = Object.keys(dirty).filter((n) => dirty[n]);
@@ -279,7 +376,9 @@ export default function Ide() {
   if (err && !run) return <ErrorState title="This run is not available" message={err} retry={refresh} />;
 
   return (
-    <div className={`ide-shell ${sideOpen ? "" : "side-closed"} ${showBottom ? "" : "bottom-closed"} ${aiOpen ? "ai-open" : ""}`}>
+    <div ref={shell} className={`ide-shell ${sideOpen ? "" : "side-closed"} ${showBottom ? "" : "bottom-closed"} ${aiOpen ? "ai-open" : ""} ${dragging ? "is-dragging" : ""}`}
+      style={{ "--ide-side": `${prefs.sideW}px`, "--ide-ai": `${prefs.aiW}px`,
+               "--ide-bottom": `${prefs.bottomH}px` }}>
       <nav className="ide-activity" aria-label="IDE views">
         {VIEWS.map((v) => (
           <button key={v.id} className={`ide-act ${sideOpen && view === v.id ? "on" : ""}`}
@@ -334,6 +433,22 @@ export default function Ide() {
                 onChange={(e) => setPrefs((p) => ({ ...p, wordWrap: e.target.checked }))} /> Word wrap</label>
               <label className="ide-check"><input type="checkbox" checked={prefs.minimap}
                 onChange={(e) => setPrefs((p) => ({ ...p, minimap: e.target.checked }))} /> Minimap</label>
+              <label className="ide-check"><input type="checkbox" checked={prefs.autosave}
+                onChange={(e) => setPrefs((p) => ({ ...p, autosave: e.target.checked }))} /> Autosave plain files</label>
+              <p className="muted small">A file the editor can write is saved 1.5s after you stop typing.
+                index.html, styles.css and app.js are never auto-saved - saving one of those rebuilds the
+                page and spends one of this run's revisions, so it stays a deliberate Ctrl+S.</p>
+              {[["sideW", "File list"], ["aiW", "Assistant"], ["bottomH", "Output"]].map(([key, label]) => (
+                <label key={key} className="ide-pref">{label}
+                  <input type="range" min={BOUND[key][0]} max={BOUND[key][1]} value={prefs[key]}
+                    onChange={(e) => setPrefs((p) => ({ ...p, [key]: Number(e.target.value) }))} />
+                  <span className="muted small">{prefs[key]}px</span>
+                  <button className="ide-mini" onClick={() => resetGrip(key)} title={`Reset the ${label.toLowerCase()} width`}
+                    aria-label={`Reset the ${label.toLowerCase()} width`}><Icon name="refresh" size={13} /></button>
+                </label>
+              ))}
+              <p className="muted small">Panel sizes: drag the edge between two panels, double-click it to
+                reset, or focus it and use the arrow keys.</p>
               <p className="muted small">Saved on this device. Keys: <kbd>Ctrl</kbd>+<kbd>S</kbd> save,
                 {" "}<kbd>Ctrl</kbd>+<kbd>H</kbd> replace in file, <kbd>Ctrl</kbd>+<kbd>F</kbd> find,
                 {" "}<kbd>Ctrl</kbd>+<kbd>P</kbd> preview.</p>
@@ -342,6 +457,14 @@ export default function Ide() {
             </div>
           )}
         </aside>
+      )}
+
+      {sideOpen && (
+        <span className="ide-grip ide-grip-side" role="separator" aria-orientation="vertical" tabIndex={0}
+          aria-label="Resize the file list" aria-valuenow={prefs.sideW}
+          aria-valuemin={BOUND.sideW[0]} aria-valuemax={BOUND.sideW[1]}
+          title="Drag, or arrow-key, to resize · double-click to reset"
+          onPointerDown={grip("sideW", "x")} onDoubleClick={() => resetGrip("sideW")} onKeyDown={nudge("sideW")} />
       )}
 
       <main className="ide-main">
@@ -429,18 +552,36 @@ export default function Ide() {
           <BottomPanel runId={runId} overview={overview} run={run} markers={markers} events={events}
             connected={connected} onJump={jump} busy={busy} setBusy={setBusy} />
         )}
+
+        {showBottom && (
+          <span className="ide-grip ide-grip-bottom" role="separator" aria-orientation="horizontal" tabIndex={0}
+            aria-label="Resize the output panel" aria-valuenow={prefs.bottomH}
+            aria-valuemin={BOUND.bottomH[0]} aria-valuemax={BOUND.bottomH[1]}
+            title="Drag, or arrow-key, to resize · double-click to reset"
+            onPointerDown={grip("bottomH", "y")} onDoubleClick={() => resetGrip("bottomH")} onKeyDown={nudge("bottomH")} />
+        )}
       </main>
 
       {aiOpen && (
-        <AssistantPanel runId={runId} version={version} files={overview?.files || []}
-          editable={editable} working={working} undo={overview?.undo}
-          setRun={setRun} refresh={refresh} onClose={() => setAiOpen(false)} />
+        <>
+          <span className="ide-grip ide-grip-ai" role="separator" aria-orientation="vertical" tabIndex={0}
+            aria-label="Resize the assistant" aria-valuenow={prefs.aiW}
+            aria-valuemin={BOUND.aiW[0]} aria-valuemax={BOUND.aiW[1]}
+            title="Drag, or arrow-key, to resize · double-click to reset"
+            onPointerDown={grip("aiW", "rx")} onDoubleClick={() => resetGrip("aiW")} onKeyDown={nudge("aiW")} />
+          <AssistantPanel runId={runId} version={version} files={overview?.files || []}
+            editable={editable} working={working} undo={overview?.undo}
+            setRun={setRun} refresh={assistantRefresh} onClose={() => setAiOpen(false)} contextOf={assistantContext} />
+        </>
       )}
 
       <footer className="ide-status">
         <span className="muted small">{run ? `${run.status.replace(/_/g, " ")}` : "…"}</span>
         {activeDoc && <span className="muted small mono">{active} · {activeDoc.kind} · {activeDoc.language || "text"}</span>}
         {!preview && active && <span className="muted small">{cursor.line}:{cursor.column}</span>}
+        {autosaved && <span className="muted small ok-text"
+          title={`Stored without a save at ${new Date(autosaved.at).toLocaleTimeString()}`}>
+          autosaved {autosaved.name}</span>}
         <span className={`muted small ${errorCount ? "err-text" : ""}`}>{errorCount} error(s),
           {" "}{problems.filter((m) => m.severity === 4).length} warning(s)</span>
         <span className="muted small">{connected ? "live" : "polling"} · {events.length} event(s)</span>

@@ -94,11 +94,10 @@ const MonacoEditor = forwardRef(function MonacoEditor({ tabs, active, theme, pre
       const v = views.current.get(name);
       if (!v) return false;
       saved.current.set(name, text);
-      if (v.model.getValue() !== text) {
-        v.model.setValue(text);
-        dirty.current.set(name, false);
-        onDirtyRef.current?.(name, false);
-      }
+      if (v.model.getValue() !== text) v.model.setValue(text);
+      // The flag clears whichever way the text went: an autosave usually hands back exactly what the
+      // buffer already holds, and a tab that stayed equal would otherwise keep claiming it was unsaved.
+      if (dirty.current.get(name) !== false) { dirty.current.set(name, false); onDirtyRef.current?.(name, false); }
       return true;
     },
     isDirty: (name) => dirty.current.get(name) === true,

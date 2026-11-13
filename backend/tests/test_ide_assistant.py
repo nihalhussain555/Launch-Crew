@@ -285,6 +285,120 @@ def test_a_run_out_of_revisions_cannot_ask_for_another_change(built, monkeypatch
     assert state(client, h, rid)["ide_edits"][0]["id"] == "i1"
 
 
+# --------------------------------------------------------------------------- adding a file, not only editing one
+
+def new_page(name="contact.html", body="Contact us"):
+    return {"summary": "Add a contact page beside the landing page.",
+            "changes": [{"file": name, "op": "create",
+                         "text": f"<html><body><h1>{body}</h1></body></html>",
+                         "note": "the page the request asked for"}]}
+
+
+def test_a_proposal_can_add_a_file_the_workspace_does_not_hold_yet(built, monkeypatch):
+    client, h, ide, rid = built
+    agent = stubbed(monkeypatch, new_page())
+    out = client.post(f"{ide}/plan", json={"instruction": "add a contact page"}, headers=h)
+    assert out.status_code == 200
+    data = out.json()
+    assert data["affected"][0]["op"] == "create" and data["affected"][0]["kind"] == "source"
+    assert data["diffs"]["contact.html"]["added"] >= 1
+    # the honest description of what applying this costs: no page rebuild, so no revision spent
+    assert "no revision is spent" in data["applies_through"]
+    assert data["limits"]["max_new_files"] == ide_assistant.MAX_NEW_FILES
+    assert "create" in agent.ask and '"op": "create"' in agent.ask
+
+    s = state(client, h, rid)
+    assert "contact.html" not in [f["name"] for f in s["files"]]      # proposed, not written
+    assert s["html_version"] == 1 and s["revisions"] == 0
+
+
+def test_applying_a_new_file_writes_it_without_rebuilding_the_page(built, monkeypatch):
+    client, h, ide, rid = built
+    stubbed(monkeypatch, new_page())
+    client.post(f"{ide}/plan", json={"instruction": "add a contact page"}, headers=h)
+
+    started = client.post(f"{ide}/apply", json={"id": "i1", "base_version": 1}, headers=h)
+    assert started.status_code == 202 and started.json()["status"] == "awaiting_approval"
+
+    s = state(client, h, rid)
+    assert "contact.html" in [f["name"] for f in s["files"]]
+    assert s["html_version"] == 1 and s["revisions"] == 0       # the page was not touched, so neither moved
+    stored = client.get(f"/api/runs/{rid}/workspace/files/contact.html", headers=h).json()
+    assert "<h1>Contact us</h1>" in stored["text"] and stored["kind"] == "source"
+    assert stored["save_via"] == "save" and stored["editable"] is True
+
+    edit = s["ide_edits"][0]
+    assert edit["status"] == "applied" and edit["result"]["applied_files"] == ["contact.html"]
+    # a new file earns the undo step the Explorer gives one, so a bad proposal is walkable back
+    assert client.get(f"/api/runs/{rid}/workspace", headers=h).json()["undo"]["can_undo"] is True
+
+
+def test_creating_a_name_the_workspace_already_holds_is_refused(built, monkeypatch):
+    client, h, ide, rid = built
+    stubbed(monkeypatch, new_page(name="index.html"))
+    out = client.post(f"{ide}/plan", json={"instruction": "recreate the page"}, headers=h)
+    assert out.status_code == 502 and "already exists" in out.json()["detail"]
+    assert state(client, h, rid)["ide_edits"] == []
+
+
+def test_a_new_file_cannot_take_a_name_the_page_already_owns(built, monkeypatch):
+    """README.md is published from the page, so "create" meets the same refusal as any existing name."""
+    client, h, ide, _ = built
+    stubbed(monkeypatch, new_page(name="README.md"))
+    out = client.post(f"{ide}/plan", json={"instruction": "add a readme"}, headers=h)
+    assert out.status_code == 502 and "README.md already exists" in out.json()["detail"]
+    # and on a workspace that does not hold it, `validate_authored` still refuses the name on ownership
+    with pytest.raises(ide_assistant.PatchError) as exc:
+        ide_assistant.verify({"changes": [{"file": "README.md", "op": "create", "text": "# mine now"}]},
+                             {"index.html": "<html>a</html>"})
+    assert "rebuilt from the page" in exc.value.message
+
+
+def test_a_new_file_is_not_counted_against_the_page_line_budget(built, monkeypatch):
+    """"Add a page" writes a whole document; the guard is there to stop a rewrite of the one that exists."""
+    client, h, ide, rid = built
+    stubbed(monkeypatch, new_page(body="x\n" * 700))
+    assert client.post(f"{ide}/plan", json={"instruction": "add a long page"}, headers=h).status_code == 200
+
+
+# --------------------------------------------------------------------------- accepting part of a proposal
+
+def test_a_reviewer_can_accept_one_file_of_a_proposal_and_leave_the_rest(built, monkeypatch):
+    client, h, ide, rid = built
+    stubbed(monkeypatch, page_patch("note the reviewer did not want"))
+    client.post(f"{ide}/plan", json={"instruction": "compact the form and note it"}, headers=h)
+
+    started = client.post(f"{ide}/apply", json={"id": "i1", "files": ["index.html"], "base_version": 1},
+                          headers=h)
+    assert started.status_code == 202
+    page = client.get(f"/api/runs/{rid}/html", headers=h).text
+    assert REPLACEMENT in page                                  # the accepted file moved
+    assert "note the reviewer did not want" not in page          # the refused one did not
+
+    edit = state(client, h, rid)["ide_edits"][0]
+    assert edit["status"] == "applied"
+    assert edit["result"]["applied_files"] == ["index.html"]
+    assert edit["result"]["skipped_files"] == ["styles.css"]
+
+
+def test_a_named_file_the_proposal_never_offered_is_refused(built, monkeypatch):
+    client, h, ide, rid = built
+    stubbed(monkeypatch, page_patch())
+    client.post(f"{ide}/plan", json={"instruction": "compact the form"}, headers=h)
+    out = client.post(f"{ide}/apply", json={"id": "i1", "files": ["app.js"]}, headers=h)
+    assert out.status_code == 409 and "does not change app.js" in out.json()["detail"]
+    assert state(client, h, rid)["ide_edits"][0]["status"] == "proposed"
+
+
+def test_accepting_every_named_file_of_a_proposal_is_the_same_as_accepting_it(built, monkeypatch):
+    client, h, ide, rid = built
+    stubbed(monkeypatch, page_patch("note"))
+    client.post(f"{ide}/plan", json={"instruction": "compact and note"}, headers=h)
+    out = client.post(f"{ide}/apply", json={"id": "i1", "files": ["index.html", "styles.css"]}, headers=h)
+    assert out.status_code == 202
+    assert state(client, h, rid)["ide_edits"][0]["result"]["skipped_files"] == []
+
+
 # --------------------------------------------------------------------------- who may reach these routes
 
 def test_another_user_and_no_token_get_nothing_at_all(built):
@@ -380,3 +494,87 @@ def test_a_patch_for_text_that_is_not_in_the_page_is_refused_by_name(built):
         ide_assistant.verify({"changes": [{"file": "index.html", "op": "replace", "find": "<marquee>",
                                            "replace": "<div>"}]}, TEXTS)
     assert "index.html" in exc.value.message and "not in that file" in exc.value.message
+
+
+# --------------------------------------------------------------------------- what the editor is showing
+
+def test_the_open_file_and_the_selected_text_reach_the_model(built, monkeypatch):
+    """The request says "this button"; only the selection says which one the reviewer meant."""
+    client, h, ide, _ = built
+    agent = stubbed(monkeypatch, page_patch())
+    out = client.post(f"{ide}/plan", json={"instruction": "tighten this button",
+                                           "active_file": "styles.css",
+                                           "selection": ".signup { padding: 24px }"}, headers=h)
+    assert out.status_code == 200
+    assert "THE USER IS VIEWING styles.css WITH THIS REGION SELECTED" in agent.ask
+    assert ".signup { padding: 24px }" in agent.ask
+    assert out.json()["sent_files"][0] == "styles.css"          # the open file leads the set that is sent
+    assert out.json()["proposal"]["context"] == {"active_file": "styles.css", "has_selection": True}
+
+
+def test_an_open_file_a_request_did_not_name_is_still_sent_first(built, monkeypatch):
+    client, h, ide, _ = built
+    stubbed(monkeypatch, page_patch())
+    out = client.post(f"{ide}/plan", json={"instruction": "something vague", "active_file": "app.js"}, headers=h)
+    assert out.json()["sent_files"][0] == "app.js"
+    # no selection, so the prompt points at the file without claiming a region was highlighted
+    assert out.json()["proposal"]["context"]["has_selection"] is False
+
+
+def test_an_active_file_that_is_not_in_the_workspace_is_ignored_not_an_error(built, monkeypatch):
+    client, h, ide, _ = built
+    stubbed(monkeypatch, page_patch())
+    out = client.post(f"{ide}/plan", json={"instruction": "compact", "active_file": "ghost.tsx"}, headers=h)
+    assert out.status_code == 200 and out.json()["proposal"]["context"]["active_file"] == ""
+
+
+# --------------------------------------------------------------------------- the same rules, off the wire
+
+def test_a_created_file_is_checked_by_the_rules_a_feature_build_is_held_to():
+    ok = ide_assistant.verify({"changes": [{"file": "about.html", "op": "create",
+                                            "text": "<html><body>About</body></html>"}]}, TEXTS)
+    assert ok["changes"] == [] and [c["file"] for c in ok["creates"]] == ["about.html"]
+    assert ok["files"] == ["about.html"] and ok["after"]["about.html"].startswith("<html>")
+    assert ide_assistant.affected(ok)[0]["save_via"] == "create"
+
+    for raw, reason in (({"changes": [{"file": "styles.css", "op": "create", "text": "<b>new</b>"}]},
+                         "already exists"),
+                        ({"changes": [{"file": "notes/../evil.md", "op": "create", "text": "content"}]},
+                         "not a workspace file name"),
+                        ({"changes": [{"file": "app.rb", "op": "create", "text": "puts 1"}]},
+                         "unsupported extension"),
+                        ({"changes": [{"file": "a.md", "op": "create", "text": "tiny"}]},
+                         "empty or stub"),
+                        ({"changes": [{"file": "", "op": "create", "text": "some content"}]},
+                         "name is required")):
+        with pytest.raises(ide_assistant.PatchError) as exc:
+            ide_assistant.verify(raw, TEXTS)
+        assert reason in exc.value.message
+
+
+def test_one_request_may_only_add_a_handful_of_files():
+    many = [{"file": f"p{i}.html", "op": "create", "text": f"<html>{i}</html>"}
+            for i in range(ide_assistant.MAX_NEW_FILES + 1)]
+    with pytest.raises(ide_assistant.PatchError) as exc:
+        ide_assistant.verify({"changes": many}, TEXTS)
+    assert "new files, over the" in exc.value.message
+
+
+def test_a_proposal_may_be_all_new_files_with_no_edits_at_all():
+    """`verify` used to need one patch to exist; a request that only adds a page has none."""
+    with pytest.raises(ide_assistant.PatchError) as exc:
+        ide_assistant.verify({"changes": []}, TEXTS)
+    assert "No changes given" in exc.value.message
+    assert ide_assistant.verify({"changes": [{"file": "x.md", "op": "create", "text": "# brand new\n"}]},
+                                TEXTS)["changes"] == []
+
+
+def test_selecting_names_the_files_a_reviewer_accepted_and_refuses_the_rest():
+    entry = {"id": "i1", "changes": [{"file": "index.html", "op": "set", "text": "a"}],
+             "creates": [{"file": "about.html", "text": "b"}], "files": ["index.html", "about.html"]}
+    assert ide_assistant.select(entry, None) == (entry["changes"], entry["creates"])
+    assert ide_assistant.select(entry, []) == (entry["changes"], entry["creates"])
+    assert ide_assistant.select(entry, ["about.html"]) == ([], entry["creates"])
+    with pytest.raises(workspace_manager.WorkspaceError) as exc:
+        ide_assistant.select(entry, ["app.js"])
+    assert "does not change app.js" in exc.value.message
